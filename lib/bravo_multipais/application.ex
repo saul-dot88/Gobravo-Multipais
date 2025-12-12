@@ -8,6 +8,7 @@ defmodule BravoMultipais.Application do
   @impl true
   def start(_type, _args) do
     children = [
+      {Oban, Application.fetch_env!(:bravo_multipais, Oban)},
       BravoMultipaisWeb.Telemetry,
       BravoMultipais.Repo,
       {DNSCluster, query: Application.get_env(:bravo_multipais, :dns_cluster_query) || :ignore},

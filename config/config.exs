@@ -22,6 +22,13 @@ config :bravo_multipais, BravoMultipaisWeb.Endpoint,
   pubsub_server: BravoMultipais.PubSub,
   live_view: [signing_salt: "P2I3CwoV"]
 
+
+config :bravo_multipais, Oban,
+  repo: BravoMultipais.Repo,
+  queues: [risk: 10, webhook: 5],
+  plugins: [Oban.Plugins.Pruner]
+
+
 # Configures the mailer
 #
 # By default it uses the "Local" adapter which stores the emails
