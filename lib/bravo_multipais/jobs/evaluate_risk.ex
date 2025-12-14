@@ -1,4 +1,17 @@
 defmodule BravoMultipais.Jobs.EvaluateRisk do
+  @moduledoc """
+  Job que evalúa el riesgo de una solicitud de crédito.
+
+  Lee la solicitud de la base de datos, aplica la política del país,
+  calcula un risk_score y actualiza el estado a:
+    - APPROVED
+    - REJECTED
+    - UNDER_REVIEW
+
+  Luego emite un broadcast para que el LiveView/Frontend
+  actualice la UI en tiempo (casi) real.
+  """
+
   use Oban.Worker, queue: :risk, max_attempts: 5
 
   alias BravoMultipais.Repo
@@ -13,11 +26,11 @@ defmodule BravoMultipais.Jobs.EvaluateRisk do
   def perform(%Oban.Job{args: %{"application_id" => id}}) do
     case Repo.get(Application, id) do
       nil ->
-        # La solicitud ya no existe, no tiene sentido reintentar
+        # La solicitud ya no existe, no vale la pena reintentar
         :discard
 
       %Application{status: status} when status in @final_statuses ->
-        # Ya fue evaluada previamente; idempotencia
+        # Ya fue evaluada antes: idempotencia
         :ok
 
       %Application{} = app ->
@@ -48,7 +61,7 @@ defmodule BravoMultipais.Jobs.EvaluateRisk do
 
     case Repo.update(changeset) do
       {:ok, updated} ->
-        # Notificamos cambio de estado a la UI (LiveView / Channels)
+        # Aquí avisamos al LiveView de que cambió el estado
         Endpoint.broadcast(
           "applications",
           "status_changed",

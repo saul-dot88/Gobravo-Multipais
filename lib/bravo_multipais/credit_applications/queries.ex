@@ -32,6 +32,7 @@ defmodule BravoMultipais.CreditApplications.Queries do
       amount: app.amount,
       monthly_income: app.monthly_income,
       status: app.status,
+      risk_score: app.risk_score,
       inserted_at: app.inserted_at
     }
   end

@@ -18,6 +18,7 @@ defmodule BravoMultipaisWeb.Router do
     pipe_through :browser
 
     get "/", PageController, :home
+    live "/", ApplicationsLive, :index
   end
 
   scope "/api", BravoMultipaisWeb do
