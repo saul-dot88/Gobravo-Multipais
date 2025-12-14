@@ -63,4 +63,43 @@ defmodule BravoMultipais.Bank.Normalizer do
   defp to_float(%Decimal{} = d), do: Decimal.to_float(d)
   defp to_float(n) when is_number(n), do: n * 1.0
   defp to_float(_), do: 0.0
+
+  @doc """
+  Construye un mapa de documento normalizado por país a partir de un único valor
+  capturado en el formulario.
+
+  Esto permite que las Policies trabajen con un shape consistente de `document`.
+  """
+  @spec build_document_map(String.t(), String.t() | nil) :: map()
+  def build_document_map(country, value)
+
+  # España: usamos `dni` como key por defecto (podrías refinar a NIF/NIE si quisieras)
+  def build_document_map("ES", value) do
+    %{
+      "dni" => value
+    }
+  end
+
+  # Italia: usamos `codice_fiscale`
+  def build_document_map("IT", value) do
+    %{
+      "codice_fiscale" => value
+    }
+  end
+
+  # Portugal: usamos `nif`
+  def build_document_map("PT", value) do
+    %{
+      "nif" => value
+    }
+  end
+
+  # Fallback para otros países (por si en un futuro agregas más)
+  def build_document_map(country, value) do
+    %{
+      "country" => country,
+      "raw" => value
+    }
+  end
+
 end

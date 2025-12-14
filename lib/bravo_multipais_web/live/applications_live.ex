@@ -367,36 +367,44 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                     <% else %>
                       <%= for app <- @applications do %>
                         <tr
-                          class="border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer"
                           phx-click="select_app"
                           phx-value-id={app.id}
+                          class={[
+                            "border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer",
+                            @selected_app && @selected_app.id == app.id && "bg-indigo-50/60"
+                          ]}
                         >
-                          <td class="py-2 px-3 font-mono text-xs text-slate-700">
-                            <%= app.country %>
+                          <!-- País -->
+                          <td class="py-2 px-3">
+                            <%= country_badge(app.country) %>
                           </td>
+
+                          <!-- Nombre -->
                           <td class="py-2 px-3 text-slate-800">
                             <%= app.full_name %>
                           </td>
+
+                          <!-- Monto -->
                           <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                             € <%= app.amount %>
                           </td>
+
+                          <!-- Ingreso mensual -->
                           <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                             € <%= app.monthly_income %>
                           </td>
+
+                          <!-- Estado -->
                           <td class="py-2 px-3 text-center">
                             <%= status_badge(app.status) %>
                           </td>
+
+                          <!-- Score -->
                           <td class="py-2 px-3 text-center">
-                            <%= if app.risk_score do %>
-                              <span class="inline-flex items-center justify-center rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-800">
-                                <%= app.risk_score %>
-                              </span>
-                            <% else %>
-                              <span class="text-xs text-slate-400 italic">
-                                pendiente
-                              </span>
-                            <% end %>
+                            <%= risk_score_chip(app.risk_score) %>
                           </td>
+
+                          <!-- Fecha creación -->
                           <td class="py-2 px-3 text-right text-xs text-slate-500">
                             <%= Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M") %>
                           </td>
@@ -517,57 +525,99 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     """
   end
 
-  # Badges de estado
+  # Chip de país con banderita
+defp country_badge(country) do
+  {flag, label} =
+    case country do
+      "ES" -> {"🇪🇸", "ES"}
+      "IT" -> {"🇮🇹", "IT"}
+      "PT" -> {"🇵🇹", "PT"}
+      other -> {"🌍", to_string(other || "N/A")}
+    end
 
-  defp status_badge("APPROVED") do
-    assigns = %{}
+  assigns = %{flag: flag, label: label}
 
-    ~H"""
-    <span class="inline-flex items-center rounded-full bg-emerald-50 px-2 py-0.5 text-xs font-semibold text-emerald-700 border border-emerald-200">
-      Aprobada
-    </span>
-    """
-  end
+  ~H"""
+  <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+    <span><%= @flag %></span>
+    <span><%= @label %></span>
+  </span>
+  """
+end
 
-  defp status_badge("REJECTED") do
-    assigns = %{}
+# Badge de estado con colores y “en evaluación” animado
+defp status_badge(status) do
+  {label, classes} =
+    case status do
+      "APPROVED" ->
+        {"Aprobada", "bg-emerald-50 text-emerald-700 border-emerald-200"}
 
-    ~H"""
-    <span class="inline-flex items-center rounded-full bg-red-50 px-2 py-0.5 text-xs font-semibold text-red-700 border border-red-200">
-      Rechazada
-    </span>
-    """
-  end
+      "UNDER_REVIEW" ->
+        {"En revisión", "bg-amber-50 text-amber-700 border-amber-200"}
 
-  defp status_badge("UNDER_REVIEW") do
-    assigns = %{}
+      "REJECTED" ->
+        {"Rechazada", "bg-rose-50 text-rose-700 border-rose-200"}
 
-    ~H"""
-    <span class="inline-flex items-center rounded-full bg-amber-50 px-2 py-0.5 text-xs font-semibold text-amber-700 border border-amber-200">
-      En revisión
-    </span>
-    """
-  end
+      "PENDING_RISK" ->
+        {"En evaluación de riesgo", "bg-slate-100 text-slate-600 border-slate-200"}
 
-  defp status_badge("PENDING_RISK") do
-    assigns = %{}
+      other ->
+        {other || "Desconocido", "bg-slate-100 text-slate-600 border-slate-200"}
+    end
 
-    ~H"""
-    <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-600 border border-slate-200">
-      Pendiente de riesgo
-    </span>
-    """
-  end
+  assigns = %{label: label, classes: classes, status: status}
 
-  defp status_badge(_other) do
-    assigns = %{}
+  ~H"""
+  <span class={
+    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
+  }>
+    <span
+      :if={@status in ["PENDING_RISK", "UNDER_REVIEW"]}
+      class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"
+    />
+    <%= @label %>
+  </span>
+  """
+end
 
-    ~H"""
-    <span class="inline-flex items-center rounded-full bg-slate-50 px-2 py-0.5 text-xs font-semibold text-slate-500 border border-slate-200">
-      Desconocido
-    </span>
-    """
-  end
+# Chip de score con indicador Alto / Medio / Bajo
+defp risk_score_chip(nil) do
+  assigns = %{}
+
+  ~H"""
+  <span class="text-xs text-slate-400 italic">
+    Pendiente
+  </span>
+  """
+end
+
+defp risk_score_chip(score) do
+  {classes, label} =
+    cond do
+      is_nil(score) ->
+        {"bg-slate-100 text-slate-500 border-slate-200", "Pendiente"}
+
+      score >= 730 ->
+        {"bg-emerald-50 text-emerald-700 border-emerald-200", "Alto"}
+
+      score >= 650 ->
+        {"bg-amber-50 text-amber-700 border-amber-200", "Medio"}
+
+      true ->
+        {"bg-rose-50 text-rose-700 border-rose-200", "Bajo"}
+    end
+
+  assigns = %{score: score, classes: classes, label: label}
+
+  ~H"""
+  <span class={
+    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
+  }>
+    <span :if={@score} class="font-mono"><%= @score %></span>
+    <span :if={@score} class="text-[10px] uppercase tracking-wide"><%= @label %></span>
+  </span>
+  """
+end
 
   # Documento según país
 

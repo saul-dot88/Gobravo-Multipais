@@ -1,116 +1,93 @@
 defmodule BravoMultipais.CreditApplications.Commands do
   @moduledoc """
-  Casos de uso para crear y actualizar solicitudes de crédito.
-  Aquí orquestamos políticas por país, proveedor bancario y jobs async.
+  Commands para crear solicitudes de crédito multipaís.
+
+  Orquesta:
+  - Normalización de parámetros de entrada
+  - Consulta del perfil bancario
+  - Aplicación de políticas por país (validación + reglas de negocio)
+  - Persistencia de la solicitud
+  - Encolado del worker de riesgo en Oban
   """
 
-  alias BravoMultipais.Repo
+  alias BravoMultipais.{Repo, Bank, Policies}
   alias BravoMultipais.CreditApplications.Application
-  alias BravoMultipais.Policies.Factory, as: PolicyFactory
-  alias BravoMultipais.Bank.Factory, as: BankFactory
-  alias BravoMultipais.Bank.Normalizer
-  alias BravoMultipais.Jobs.EvaluateRisk
-  alias Oban
+  alias BravoMultipais.Workers.EvaluateRisk
+  alias Ecto.Changeset
 
-  @doc """
-  Crea una nueva solicitud de crédito multipaís.
+  @spec create_application(map()) ::
+          {:ok, Application.t()}
+          | {:error, Changeset.t()}
+          | {:error, {:business_rules_failed, term()}}
+          | {:error, term()}
+  def create_application(params) when is_map(params) do
+    country = params["country"] || params[:country]
 
-  Flujo:
-    1. Validar país y datos básicos.
-    2. Aplicar validación de documento según país.
-    3. Llamar proveedor bancario para obtener perfil financiero.
-    4. Normalizar perfil bancario.
-    5. Aplicar reglas de negocio por país.
-    6. Determinar estado inicial.
-    7. Guardar en DB.
-    8. Encolar job de evaluación de riesgo.
-  """
-  def create_application(attrs) when is_map(attrs) do
-    Repo.transaction(fn ->
-      country = Map.fetch!(attrs, "country")
+    with {:ok, app_attrs} <- build_attrs(params),
+         {:ok, bank_profile} <- Bank.fetch_profile(country, app_attrs),
+         policy <- Policies.policy_for(country),
+         :ok <- policy.validate_document(app_attrs.document),
+         :ok <- policy.business_rules(app_attrs, bank_profile),
+         initial_status <- policy.next_status_on_creation(app_attrs, bank_profile),
+         {:ok, %Application{} = app} <- create_and_enqueue(app_attrs, initial_status) do
+      {:ok, app}
+    else
+      {:error, %Changeset{} = changeset} ->
+        {:error, changeset}
 
-      policy = PolicyFactory.policy_for(country)
-      bank_provider = BankFactory.provider_for(country)
+      {:error, {:business_rules_failed, _} = err} ->
+        {:error, err}
 
-      # 1) Validar documento según país (DNI ES, CF IT, NIF PT, etc.)
-      document = Map.fetch!(attrs, "document")
-
-      case policy.validate_document(document) do
-        :ok ->
-          :ok
-
-        {:error, reason} ->
-          Repo.rollback({:validation_error, :invalid_document, reason})
-      end
-
-      # 2) Obtener información bancaria simulada para el país
-      case bank_provider.fetch_info(document) do
-        {:ok, raw_bank_data} ->
-          bank_profile = Normalizer.normalize(country, raw_bank_data)
-
-          # 3) Aplicar reglas de negocio por país (monto, ingreso, deuda, etc.)
-          #    Para eso armamos una estructura transitoria con los datos de la solicitud
-          #    (sin guardar todavía).
-          app_params = %{
-            country: country,
-            full_name: Map.fetch!(attrs, "full_name"),
-            document: document,
-            amount: Map.fetch!(attrs, "amount"),
-            monthly_income: Map.fetch!(attrs, "monthly_income"),
-            bank_profile: bank_profile
-          }
-
-          case policy.business_rules(app_params, bank_profile) do
-            :ok ->
-              # 4) Determinar estado inicial según país y perfil bancario
-              initial_status = policy.next_status_on_creation(app_params, bank_profile)
-
-              # 5) Persistimos en DB
-              create_and_enqueue(app_params, initial_status)
-
-            {:error, reason} ->
-              Repo.rollback({:validation_error, :business_rules_failed, reason})
-          end
-
-        {:error, reason} ->
-          Repo.rollback({:integration_error, :bank_provider_failed, reason})
-      end
-    end)
-    |> case do
-      {:ok, app} ->
-        {:ok, app}
-
-      {:error, {:validation_error, type, detail}} ->
-        {:error, {:validation_error, type, detail}}
-
-      {:error, {:integration_error, type, detail}} ->
-        {:error, {:integration_error, type, detail}}
-
-      {:error, other} ->
-        {:error, other}
+      {:error, reason} ->
+        {:error, reason}
     end
   end
 
-  defp create_and_enqueue(app_params, initial_status) do
-    params_for_db =
-      app_params
+  # Normaliza/arma el mapa base con el que trabajan las Policies y el schema
+  defp build_attrs(params) do
+    country        = params["country"] || params[:country]
+    full_name      = params["full_name"] || params[:full_name]
+    amount         = params["amount"] || params[:amount]
+    monthly_income = params["monthly_income"] || params[:monthly_income]
+    document_value = params["document_value"] || params[:document_value]
+
+    document =
+      BravoMultipais.Bank.Normalizer.build_document_map(country, document_value)
+
+    attrs = %{
+      country: country,
+      full_name: full_name,
+      amount: amount,
+      monthly_income: monthly_income,
+      document: document
+    }
+
+    {:ok, attrs}
+  rescue
+    e ->
+      {:error, {:bad_request, e}}
+  end
+
+  # Inserta la solicitud con el estado inicial y encola el worker de riesgo
+  defp create_and_enqueue(app_attrs, initial_status) do
+    attrs_with_status =
+      app_attrs
       |> Map.put(:status, initial_status)
 
     %Application{}
-    |> Application.create_changeset(params_for_db)
+    |> Application.changeset(attrs_with_status)
     |> Repo.insert()
     |> case do
-      {:ok, app} ->
-        # Encolamos job de evaluación de riesgo
+      {:ok, %Application{} = app} ->
+        # Encolamos el job en la cola :risk
         %{application_id: app.id}
-        |> EvaluateRisk.new()
+        |> EvaluateRisk.new(queue: :risk)
         |> Oban.insert()
 
-        app
+        {:ok, app}
 
-      {:error, changeset} ->
-        # rollback de la transacción
-        Repo.rollback({:changeset_error, changeset})
+      error ->
+        error
     end
   end
 end

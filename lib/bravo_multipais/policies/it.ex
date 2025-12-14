@@ -1,43 +1,39 @@
-defmodule BravoMultipais.Policies.PT do
-  @behaviour BravoMultipais.Policies.Policy
+defmodule BravoMultipais.Policies.IT do
+  @moduledoc """
+  Políticas de validación y riesgo para Italia.
 
-  @min_income        500.0
-  @max_amount_factor 12.0
-  @max_dti           7.0
+  Implementa el behaviour `BravoMultipais.Policies.Policy`.
+  """
+
+  @behaviour BravoMultipais.Policies.Policy
 
   @impl true
   def validate_document(doc) when is_map(doc) do
-    nif = get(doc, "nif")
+    cf = get(doc, "codice_fiscale")
 
     cond do
-      is_binary(nif) and String.length(nif) == 9 and String.match?(nif, ~r/^\d+$/) ->
+      is_binary(cf) and String.length(cf) >= 11 ->
         :ok
 
       true ->
-        {:error, :invalid_nif}
+        {:error, :invalid_codice_fiscale}
     end
   end
 
   @impl true
   def business_rules(app, bank_profile) do
-    amount     = app        |> field(:amount)          |> to_float()
-    income     = app        |> field(:monthly_income)  |> to_float()
-    total_debt = bank_profile |> field(:total_debt)    |> to_float()
+    amount = to_float(app.amount)
+    income = to_float(app.monthly_income)
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
 
     cond do
-      income <= 0.0 ->
+      income <= 0 ->
         {:error, :invalid_income}
 
-      income < @min_income ->
-        {:error, {:invalid_income, :below_minimum_income}}
-
-      amount <= 0.0 ->
-        {:error, :invalid_amount}
-
-      amount > income * @max_amount_factor ->
+      amount > income * 15 ->
         {:error, :amount_too_high_relative_to_income}
 
-      safe_ratio(total_debt, income) > @max_dti ->
+      total_debt / income > 6 ->
         {:error, :debt_to_income_too_high}
 
       true ->
@@ -46,74 +42,50 @@ defmodule BravoMultipais.Policies.PT do
   end
 
   @impl true
-  def next_status_on_creation(app, bank_profile) do
-    amount      = app        |> field(:amount)       |> to_float()
-    avg_balance = bank_profile |> field(:avg_balance) |> to_float()
+  def next_status_on_creation(app, _bank_profile) do
+    amount = to_float(app.amount)
 
-    cond do
-      amount > 15_000.0 and avg_balance < amount / 2.0 ->
-        "UNDER_REVIEW"
-
-      true ->
-        "PENDING_RISK"
+    if amount > 25_000 do
+      "UNDER_REVIEW"
+    else
+      "PENDING_RISK"
     end
   end
 
   @impl true
   def assess_risk(app, bank_profile) do
-    amount      = app        |> field(:amount)         |> to_float()
-    income      = app        |> field(:monthly_income) |> to_float()
-    total_debt  = bank_profile |> field(:total_debt)   |> to_float()
-    avg_balance = bank_profile |> field(:avg_balance)  |> to_float()
+    amount = to_float(app.amount)
+    income = to_float(app.monthly_income)
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
+    avg_balance = to_float(Map.get(bank_profile, :avg_balance, 0))
+    external_score = Map.get(bank_profile, :score) || Map.get(bank_profile, :credit_score, 680)
 
-    dti = safe_ratio(total_debt, income)  # deuda / ingreso
-    ati = safe_ratio(amount, income)      # monto / ingreso
-
-    # Un poco más permisivos si el saldo promedio es alto
-    balance_factor = avg_balance / 2000.0
+    dti = safe_ratio(total_debt, income)   # debt-to-income
+    ati = safe_ratio(amount, income)      # amount-to-income
 
     raw_score =
-      830.0
-      - dti * 11.0
-      - ati * 6.0
-      + balance_factor * 10.0
+      external_score * 0.4 +
+        (850.0 - dti * 10.0 - ati * 7.0 + avg_balance / 1500.0) * 0.6
 
-    score =
-      raw_score
-      |> trunc()
-      |> clamp(300, 850)
+    score = raw_score |> trunc() |> clamp(300, 850)
 
     final_status =
       cond do
-        score >= 710 -> "APPROVED"
-        score >= 630 -> "UNDER_REVIEW"
+        score >= 730 -> "APPROVED"
+        score >= 650 -> "UNDER_REVIEW"
         true -> "REJECTED"
       end
 
     %{score: score, final_status: final_status}
   end
 
-  ## ------------- Helpers -------------
-
-  # Para documentos (usa strings como "nif")
   defp get(map, key) do
     Map.get(map, key) || Map.get(map, String.to_atom(key))
   rescue
     ArgumentError -> Map.get(map, key)
   end
 
-  # Para campos genéricos de app / bank_profile (struct o map, atom o string)
-  defp field(map, key) when is_map(map) do
-    Map.get(map, key) || Map.get(map, to_string(key))
-  end
-
-  defp field(_other, _key), do: nil
-
-  # Conversiones a float tolerantes: Decimal, número, string "3000", etc.
-  defp to_float(nil), do: 0.0
-
   defp to_float(%Decimal{} = d), do: Decimal.to_float(d)
-
   defp to_float(n) when is_integer(n) or is_float(n), do: n * 1.0
 
   defp to_float(s) when is_binary(s) do
@@ -125,10 +97,10 @@ defmodule BravoMultipais.Policies.PT do
 
   defp to_float(_), do: 0.0
 
-  defp safe_ratio(_val, income) when income <= 0.0, do: 0.0
+  defp safe_ratio(_val, income) when income <= 0, do: 0.0
   defp safe_ratio(val, income), do: val / income
 
-  defp clamp(v, min, _max) when v < min, do: min
-  defp clamp(v, _min, max) when v > max, do: max
+  defp clamp(v, min, max) when v < min, do: min
+  defp clamp(v, min, max) when v > max, do: max
   defp clamp(v, _min, _max), do: v
 end
