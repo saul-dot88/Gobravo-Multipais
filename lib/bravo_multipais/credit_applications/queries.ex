@@ -1,30 +1,47 @@
 defmodule BravoMultipais.CreditApplications.Queries do
-  import Ecto.Query, only: [from: 2]
-  alias BravoMultipais.{Repo, CreditApplications.Application}
+  @moduledoc """
+  Consultas de solo lectura sobre las solicitudes de crédito.
+  """
 
+  import Ecto.Query, only: [from: 2, order_by: 2]
+
+  alias BravoMultipais.Repo
+  alias BravoMultipais.CreditApplications.Application
+
+  @spec get_application(Ecto.UUID.t()) :: Application.t() | nil
   def get_application(id), do: Repo.get(Application, id)
 
+  @spec get_application_details(Ecto.UUID.t()) :: Application.t() | nil
+  def get_application_details(id), do: get_application(id)
+
+  @spec list_applications(map()) :: list(map())
   def list_applications(params \\ %{}) do
-    country = Map.get(params, "country")
-    status = Map.get(params, "status")
+    country = Map.get(params, "country") || Map.get(params, :country)
+    status  = Map.get(params, "status")  || Map.get(params, :status)
 
     Application
     |> maybe_filter_country(country)
     |> maybe_filter_status(status)
+    |> order_by(desc: :inserted_at)
     |> Repo.all()
     |> Enum.map(&to_public/1)
   end
 
   defp maybe_filter_country(query, nil), do: query
-  defp maybe_filter_country(query, country),
-    do: from a in query, where: a.country == ^country
+  defp maybe_filter_country(query, ""),  do: query
+
+  defp maybe_filter_country(query, country) do
+    from a in query, where: a.country == ^country
+  end
 
   defp maybe_filter_status(query, nil), do: query
-  defp maybe_filter_status(query, status),
-    do: from a in query, where: a.status == ^status
+  defp maybe_filter_status(query, ""),  do: query
 
-  # Simplificamos la forma en que regresamos las apps al index
-  defp to_public(app) do
+  defp maybe_filter_status(query, status) do
+    from a in query, where: a.status == ^status
+  end
+
+  defp to_public(%Application{} = app) do
     %{
       id: app.id,
       country: app.country,
