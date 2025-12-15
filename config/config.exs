@@ -23,6 +23,14 @@ config :bravo_multipais, BravoMultipaisWeb.Endpoint,
   live_view: [signing_salt: "P2I3CwoV"]
 
 
+config :bravo_multipais, BravoMultipais.Finch,
+  pools: %{
+    default: [size: 10, count: 1]
+  }
+
+config :bravo_multipais,
+  webhook_url: "http://localhost:4000/mock/webhooks/applications"
+
 config :bravo_multipais, Oban,
   repo: BravoMultipais.Repo,
   queues: [risk: 10, webhook: 5],

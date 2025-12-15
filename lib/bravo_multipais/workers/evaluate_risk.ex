@@ -16,16 +16,45 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   alias BravoMultipaisWeb.Endpoint
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"application_id" => app_id}}) do
-    # 1) Buscar la solicitud
-    case Repo.get(Application, app_id) do
-      nil ->
-        # Si ya no existe, descartamos el job (no tiene sentido reintentar)
-        {:discard, :application_not_found}
+  def perform(%Oban.Job{args: %{"application_id" => id}}) do
+    app = Repo.get!(Application, id)
 
-      %Application{} = app ->
-        do_evaluate(app)
-    end
+    policy = Policies.policy_for(app.country)
+    bank_profile = Bank.fetch_profile!(app.country, app)
+
+    %{score: score, final_status: final_status} =
+      policy.assess_risk(app, bank_profile)
+
+    {:ok, app} =
+      app
+      |> Application.changeset(%{
+        risk_score: score,
+        status: final_status,
+        bank_profile: bank_profile
+      })
+      |> Repo.update()
+
+    Logger.info("Risk evaluation completed",
+      application_id: app.id,
+      status: app.status,
+      risk_score: app.risk_score
+    )
+
+    # 1) Notificar al frontend (ya lo tenías):
+    Phoenix.PubSub.broadcast(
+      BravoMultipais.PubSub,
+      "applications",
+      %Phoenix.Socket.Broadcast{
+        topic: "applications",
+        event: "updated",
+        payload: %{id: app.id}
+      }
+    )
+
+    # 2) Encolar webhook externo
+    :ok = WebhookNotifier.enqueue(app.id)
+
+    :ok
   end
 
   def perform(%Oban.Job{args: args}) do

@@ -28,6 +28,12 @@ defmodule BravoMultipaisWeb.Router do
     get "/applications", ApplicationController, :index
   end
 
+  scope "/mock", BravoMultipaisWeb do
+    pipe_through :api
+
+    post "/webhooks/applications", MockWebhookController, :receive
+  end
+
   # Other scopes may use custom stacks.
   # scope "/api", BravoMultipaisWeb do
   #   pipe_through :api
