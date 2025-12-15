@@ -79,6 +79,56 @@ defmodule BravoMultipais.Policies.IT do
     %{score: score, final_status: final_status}
   end
 
+  @impl true
+  def validate_document(doc) when is_map(doc) do
+    cf = get(doc, "codice_fiscale") |> to_string() |> String.trim()
+
+    cond do
+      cf == "" ->
+        {:error, :missing_document}
+
+      looks_like_spanish_dni?(cf) ->
+        # Caso borde: eligieron Italia pero metieron algo tipo DNI español
+        {:error, {:document_country_mismatch, expected: "IT", detected: "ES"}}
+
+      String.length(cf) < 11 ->
+        {:error, :invalid_codice_fiscale}
+
+      true ->
+        :ok
+    end
+  end
+
+  defp looks_like_spanish_dni?(value) do
+    # 8 dígitos + 1 letra mayúscula, patrón típico de DNI
+    String.match?(value, ~r/^\d{8}[A-Z]$/)
+  end
+
+  defp get(map, key) do
+    Map.get(map, key) || Map.get(map, String.to_atom(key))
+  rescue
+    ArgumentError -> Map.get(map, key)
+  end
+
+  defp to_float(%Decimal{} = d), do: Decimal.to_float(d)
+  defp to_float(n) when is_integer(n) or is_float(n), do: n * 1.0
+
+  defp to_float(s) when is_binary(s) do
+    case Float.parse(s) do
+      {v, _} -> v
+      :error -> 0.0
+    end
+  end
+
+  defp to_float(_), do: 0.0
+
+  defp safe_ratio(_val, income) when income <= 0, do: 0.0
+  defp safe_ratio(val, income), do: val / income
+
+  defp clamp(v, min, max) when v < min, do: min
+  defp clamp(v, min, max) when v > max, do: max
+  defp clamp(v, _min, _max), do: v
+
   defp get(map, key) do
     Map.get(map, key) || Map.get(map, String.to_atom(key))
   rescue

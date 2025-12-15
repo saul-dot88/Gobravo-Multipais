@@ -1,7 +1,7 @@
 defmodule BravoMultipaisWeb.ApplicationsLive do
   use BravoMultipaisWeb, :live_view
 
-  alias BravoMultipais.CreditApplications.{Commands, Queries}
+  alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
   alias BravoMultipaisWeb.Endpoint
 
   @impl true
@@ -23,6 +23,13 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
      |> assign(:filter_status, "")
      |> assign(:form, empty_form())
      |> assign(:selected_app, nil)
+     |> assign(:form, %{
+     "country" => "ES",
+     "full_name" => "",
+     "document_value" => "",
+     "amount" => "",
+     "monthly_income" => ""
+     })
      |> assign(:error_message, nil)
      |> assign(:success_message, nil)}
   end
@@ -524,6 +531,43 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     </div>
     """
   end
+
+
+@impl true
+def handle_info(
+      %Phoenix.Socket.Broadcast{
+        topic: "applications",
+        event: "updated",
+        payload: %{id: id}
+      },
+      socket
+    ) do
+  # recarga lista respetando filtros actuales
+  applications =
+    Queries.list_applications(%{
+      country: socket.assigns.filter_country,
+      status: socket.assigns.filter_status
+    })
+
+  # si justo la seleccionada es la que se actualizó, recárgala desde la BD
+  selected_app =
+    case socket.assigns.selected_app do
+      %Application{id: ^id} ->
+        Queries.get_application(id)
+
+      other ->
+        other
+    end
+
+  {:noreply,
+   socket
+   |> assign(applications: applications, selected_app: selected_app)}
+end
+
+@impl true
+def handle_info(_msg, socket) do
+  {:noreply, socket}
+end
 
   # Chip de país con banderita
 defp country_badge(country) do

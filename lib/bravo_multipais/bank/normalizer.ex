@@ -71,35 +71,46 @@ defmodule BravoMultipais.Bank.Normalizer do
   Esto permite que las Policies trabajen con un shape consistente de `document`.
   """
   @spec build_document_map(String.t(), String.t() | nil) :: map()
-  def build_document_map(country, value)
+  def build_document_map(country, raw_value) do
+    IO.inspect(raw_value)
+    value =
+      raw_value
+      |> safe_to_string()
+      |> String.trim()
 
-  # España: usamos `dni` como key por defecto (podrías refinar a NIF/NIE si quisieras)
-  def build_document_map("ES", value) do
-    %{
-      "dni" => value
-    }
+    IO.inspect(value)
+    IO.inspect(country)
+
+    case country |> to_string() |> String.upcase() do
+      "ES" ->
+        # Para España podemos tratar todo como "dni" genérico;
+        # la policy luego decide si parece DNI/NIF/NIE.
+        %{
+          "dni" => value,
+          "raw" => value
+        }
+
+      "IT" ->
+        # Italia: siempre mandamos el valor como codice_fiscale
+        %{
+          "codice_fiscale" => value,
+          "raw" => value
+        }
+
+      "PT" ->
+        # Portugal: NIF (9 dígitos) + raw
+        %{
+          "nif" => value,
+          "raw" => value
+        }
+
+      _other ->
+        # País no soportado: al menos preservamos el raw
+        %{"raw" => value}
+    end
   end
 
-  # Italia: usamos `codice_fiscale`
-  def build_document_map("IT", value) do
-    %{
-      "codice_fiscale" => value
-    }
-  end
-
-  # Portugal: usamos `nif`
-  def build_document_map("PT", value) do
-    %{
-      "nif" => value
-    }
-  end
-
-  # Fallback para otros países (por si en un futuro agregas más)
-  def build_document_map(country, value) do
-    %{
-      "country" => country,
-      "raw" => value
-    }
-  end
+  defp safe_to_string(nil), do: ""
+  defp safe_to_string(v), do: Kernel.to_string(v)
 
 end
