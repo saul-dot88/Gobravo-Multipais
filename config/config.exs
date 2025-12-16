@@ -7,9 +7,25 @@
 # General application configuration
 import Config
 
+config :bravo_multipais, :scopes,
+  user: [
+    default: true,
+    module: BravoMultipais.Accounts.Scope,
+    assign_key: :current_scope,
+    access_path: [:user, :id],
+    schema_key: :user_id,
+    schema_type: :id,
+    schema_table: :users,
+    test_data_fixture: BravoMultipais.AccountsFixtures,
+    test_setup_helper: :register_and_log_in_user
+  ]
+
 config :bravo_multipais,
   ecto_repos: [BravoMultipais.Repo],
   generators: [timestamp_type: :utc_datetime]
+
+config :bravo_multipais,
+  backoffice_password: System.get_env("BACKOFFICE_PASSWORD") || "secret123"
 
 # Configures the endpoint
 config :bravo_multipais, BravoMultipaisWeb.Endpoint,

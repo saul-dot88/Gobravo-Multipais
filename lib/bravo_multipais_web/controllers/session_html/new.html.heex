@@ -1,0 +1,45 @@
+~H"""
+<div class="min-h-screen flex items-center justify-center bg-slate-100">
+  <div class="w-full max-w-md bg-white shadow-xl rounded-2xl p-8 space-y-6">
+    <h1 class="text-2xl font-bold text-slate-800 text-center">
+      Acceso backoffice
+    </h1>
+
+    <p class="text-sm text-slate-500 text-center">
+      Ingresa la clave de backoffice para ver el panel de solicitudes.
+    </p>
+
+    <%= if live_flash(@flash, :error) do %>
+      <div class="text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+        <%= live_flash(@flash, :error) %>
+      </div>
+    <% end %>
+
+    <form action={~p"/login"} method="post" class="space-y-4">
+      <input type="hidden" name="_csrf_token" value={Plug.CSRFProtection.get_csrf_token()} />
+
+      <div>
+        <label class="block text-sm font-medium text-slate-700 mb-1">
+          Clave de acceso
+        </label>
+        <input
+          type="password"
+          name="password"
+          required
+          class="block w-full rounded-xl border-slate-300 shadow-sm text-sm
+                 focus:border-indigo-500 focus:ring-indigo-500"
+        />
+      </div>
+
+      <button
+        type="submit"
+        class="w-full inline-flex items-center justify-center px-4 py-2 rounded-xl
+               text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700
+               shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500"
+      >
+        Entrar al panel
+      </button>
+    </form>
+  </div>
+</div>
+"""
