@@ -1,0 +1,20 @@
+<.simple_form
+  for={@changeset}
+  phx-submit="create_application"
+>
+  <.input field={f[:country]} type="select" label="Country" options={country_options()} />
+
+  <.input
+    field={f[:document_value]}
+    label={document_label(@changeset)}
+    placeholder={document_placeholder(@changeset)}
+  />
+
+  <.input field={f[:full_name]} label="Full name" />
+  <.input field={f[:amount]} type="number" label="Amount" />
+  <.input field={f[:monthly_income]} type="number" label="Monthly income" />
+
+  <:actions>
+    <.button>Submit</.button>
+  </:actions>
+</.simple_form>

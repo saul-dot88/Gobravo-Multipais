@@ -183,9 +183,16 @@ defmodule BravoMultipais.Accounts do
 
   If the token is valid `{user, token_inserted_at}` is returned, otherwise `nil` is returned.
   """
-  def get_user_by_session_token(token) do
-    {:ok, query} = UserToken.verify_session_token_query(token)
-    Repo.one(query)
+  def get_user_by_session_token(nil), do: nil
+
+  def get_user_by_session_token(token) when is_binary(token) do
+    with {:ok, query} <- UserToken.verify_session_token_query(token),
+        {user, auth_at} <- Repo.one(query) do
+      # Inyectamos authenticated_at en el struct virtual
+      %{user | authenticated_at: auth_at}
+    else
+      _ -> nil
+    end
   end
 
   @doc """

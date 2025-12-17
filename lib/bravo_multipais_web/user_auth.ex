@@ -7,6 +7,8 @@ defmodule BravoMultipaisWeb.UserAuth do
   alias BravoMultipais.Accounts
   alias BravoMultipais.Accounts.Scope
   alias BravoMultipais.Accounts.User
+  alias BravoMultipaisWeb.Router.Helpers, as: Routes
+
 
 
   # Make the remember me cookie valid for 14 days. This should match
@@ -66,40 +68,43 @@ defmodule BravoMultipaisWeb.UserAuth do
 
   Will reissue the session token if it is older than the configured age.
   """
+
   def fetch_current_scope_for_user(conn, _opts) do
-    user_token = get_session(conn, :user_token)
+  token = get_session(conn, :user_token)
 
-    scope =
-      case user_token && Accounts.get_user_by_session_token(user_token) do
-        # tu get_user_by_session_token seguramente ya devuelve {user, authenticated_at}
-        {%User{} = user, authenticated_at} ->
-          %Scope{
-            user: user,
-            role: user.role || "external",
-            authenticated_at: authenticated_at
-          }
+  {scope, user} =
+    case token && Accounts.get_user_by_session_token(token) do
+      # Nada en DB → no hay sesión
+      nil ->
+        {nil, nil}
 
-        _ ->
-          nil
-      end
+      # Caso 1: phx.gen.auth clásico → solo regresa el %User{}
+      %User{} = user ->
+        scope = Scope.for_user(user)
+        {scope, user}
 
-    conn
-    |> assign(:current_scope, scope)
-    |> assign(:current_user, if(scope, do: scope.user, else: nil))
-  end
+      # Caso 2: tú modificaste el query para regresar {user, algo}
+      {%User{} = user, _meta} ->
+        # Si tu Scope necesita authenticated_at y lo trae en el user:
+        # scope = Scope.for_user(user, user.authenticated_at)
+        scope = Scope.for_user(user)
+        {scope, user}
+
+      # Cualquier otra cosa rara → nos protegemos
+      _other ->
+        {nil, nil}
+    end
+
+  conn
+  |> assign(:current_scope, scope)
+  |> assign(:current_user, user)
+end
 
   def fetch_current_user(conn, _opts) do
     {user_token, conn} = ensure_user_token(conn)
     user = user_token && Accounts.get_user_by_session_token(user_token)
     assign(conn, :current_user, user)
   end
-
-  defp derive_role(%User{role: role}) when is_binary(role) and byte_size(role) > 0 do
-    role
-  end
-
-  defp derive_role(%User{}), do: "external"
-  defp derive_role(_),       do: "external"
 
   defp ensure_user_token(conn) do
     if token = get_session(conn, :user_token) do
@@ -237,8 +242,21 @@ defmodule BravoMultipaisWeb.UserAuth do
         live "/profile", ProfileLive, :index
       end
   """
+  # Para sesiones que solo necesitan saber si hay usuario + rol
   def on_mount(:mount_current_scope, _params, session, socket) do
-    {:cont, mount_current_scope(socket, session)}
+    socket =
+      socket
+      |> Phoenix.LiveView.Utils.assign_new(:current_user, fn ->
+        case session["user_token"] do
+          nil -> nil
+          token -> Accounts.get_user_by_session_token(token)
+        end
+      end)
+      |> Phoenix.LiveView.Utils.assign_new(:current_scope, fn %{current_user: user} ->
+        Scope.for_user(user, user && user.authenticated_at)
+      end)
+
+    {:cont, socket}
   end
 
   def on_mount(:require_authenticated, _params, session, socket) do
@@ -314,15 +332,35 @@ defmodule BravoMultipaisWeb.UserAuth do
   end
 end
 
+  # Si el usuario ya está autenticado, que NO vea el login
   def redirect_if_user_is_authenticated(conn, _opts) do
-  if conn.assigns[:current_scope] do
-    conn
-    |> Phoenix.Controller.redirect(to: ~p"/")
-    |> Plug.Conn.halt()
-  else
-    conn
+    current_scope = conn.assigns[:current_scope]
+    current_user  = conn.assigns[:current_user]
+
+    if current_scope || current_user do
+      conn
+      |> redirect(to: ~p"/")
+      |> halt()
+    else
+      conn
+    end
   end
-end
+
+# Para proteger rutas que requieren login
+  def require_authenticated_user(conn, _opts) do
+    current_scope = conn.assigns[:current_scope]
+    current_user  = conn.assigns[:current_user]
+
+    if current_scope || current_user do
+      conn
+    else
+      conn
+      |> put_flash(:error, "You must log in to access this page.")
+      |> maybe_store_return_to()
+      |> redirect(to: ~p"/users/log-in")
+      |> halt()
+    end
+  end
 
   @doc "Returns the path to redirect to after log in."
   # the user was already logged in, redirect to settings
@@ -336,7 +374,10 @@ end
   Plug for routes that require the user to be authenticated.
   """
   def require_authenticated_user(conn, _opts) do
-    if conn.assigns.current_scope && conn.assigns.current_scope.user do
+    current_scope = conn.assigns[:current_scope]
+    current_user  = conn.assigns[:current_user]
+
+    if current_scope || current_user do
       conn
     else
       conn

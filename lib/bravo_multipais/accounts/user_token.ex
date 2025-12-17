@@ -5,6 +5,7 @@ defmodule BravoMultipais.Accounts.UserToken do
 
   @hash_algorithm :sha256
   @rand_size 32
+  @session_validity_in_days 60
 
   # It is very important to keep the magic link token expiry short,
   # since someone with access to the email may take over the account.
@@ -56,11 +57,14 @@ defmodule BravoMultipais.Accounts.UserToken do
   not expired (after @session_validity_in_days).
   """
   def verify_session_token_query(token) do
+    days = @session_validity_in_days
+
     query =
-      from token in by_token_and_context_query(token, "session"),
+      from token in __MODULE__,
         join: user in assoc(token, :user),
-        where: token.inserted_at > ago(@session_validity_in_days, "day"),
-        select: {%{user | authenticated_at: token.authenticated_at}, token.inserted_at}
+        where: token.token == ^token and token.context == "session",
+        where: token.inserted_at > ago(^days, "day"),
+        select: {user, token.authenticated_at}
 
     {:ok, query}
   end

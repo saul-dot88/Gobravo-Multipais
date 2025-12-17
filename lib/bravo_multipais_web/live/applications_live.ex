@@ -36,44 +36,38 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
 
   @impl true
   def handle_event("create_application", params, socket) do
-    attrs = build_attrs_from_params(params)
+      country         = params["country"] || params[:country]
+      document_value  = params["document_value"] || ""
 
-    case Commands.create_application(attrs) do
-      {:ok, _app} ->
-        applications = Queries.list_applications(%{})
+      document =
+        case country do
+          "IT" -> %{"codice_fiscale" => document_value}
+          "ES" -> %{"dni"            => document_value}
+          "PT" -> %{"nif"            => document_value}
+          _    -> %{"raw"            => document_value}
+        end
 
-        {:noreply,
-         socket
-         |> assign(:applications, applications)
-         |> assign(:form, empty_form())
-         |> assign(:error_message, nil)
-         |> assign(:success_message, "Solicitud creada. Evaluando riesgo...")}
+      params =
+        params
+        |> Map.put("document", document)
+        |> Map.delete("document_value")
 
-      {:error, {:validation_error, type, detail}} ->
-        {:noreply,
-         socket
-         |> assign(:error_message, "Error de validación (#{inspect(type)}): #{inspect(detail)}")
-         |> assign(:success_message, nil)}
+      case CreditApplications.create_application(params) do
+        {:ok, app} ->
+          # recargar lista, limpiar form, mostrar flash, etc
+          {:noreply,
+          socket
+          |> put_flash(:info, "Application created (#{app.country} - #{app.status})")
+          |> assign(:applications, CreditApplications.list_applications(%{}))
+          |> assign(:changeset, CreditApplications.change_application())}
 
-      {:error, {:integration_error, type, detail}} ->
-        {:noreply,
-         socket
-         |> assign(:error_message, "Error integrando proveedor bancario (#{inspect(type)}): #{inspect(detail)}")
-         |> assign(:success_message, nil)}
+        {:error, {:policy_error, reason}} ->
+          {:noreply, put_flash(socket, :error, "Business rule failed: #{inspect(reason)}")}
 
-      {:error, {:changeset_error, changeset}} ->
-        {:noreply,
-         socket
-         |> assign(:error_message, "Datos inválidos: #{inspect(changeset.errors)}")
-         |> assign(:success_message, nil)}
-
-      {:error, other} ->
-        {:noreply,
-         socket
-         |> assign(:error_message, "Error inesperado: #{inspect(other)}")
-         |> assign(:success_message, nil)}
+        {:error, %Ecto.Changeset{} = changeset} ->
+          {:noreply, assign(socket, :changeset, changeset)}
+      end
     end
-  end
 
   @impl true
   def handle_event("filter", %{"country" => country, "status" => status}, socket) do
@@ -531,6 +525,32 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     </div>
     """
   end
+
+  defp country_options do
+  [
+    {"Spain (ES)", "ES"},
+    {"Italy (IT)", "IT"},
+    {"Portugal (PT)", "PT"}
+  ]
+end
+
+defp document_label(%Ecto.Changeset{} = changeset) do
+  case Ecto.Changeset.get_field(changeset, :country) do
+    "ES" -> "DNI"
+    "IT" -> "Codice Fiscale"
+    "PT" -> "NIF"
+    _    -> "Document"
+  end
+end
+
+defp document_placeholder(%Ecto.Changeset{} = changeset) do
+  case Ecto.Changeset.get_field(changeset, :country) do
+    "ES" -> "12345678Z"
+    "IT" -> "BNCMRC80A01F208Y"
+    "PT" -> "123456789"
+    _    -> "Document identifier"
+  end
+end
 
 
 @impl true

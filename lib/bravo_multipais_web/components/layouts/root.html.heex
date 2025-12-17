@@ -31,6 +31,9 @@
     </script>
   </head>
   <body class="bg-slate-100">
+    <pre class="text-xs">
+      current_scope = <%= inspect(@current_scope) %>
+    </pre>
     <ul class="menu menu-horizontal w-full relative z-10 flex items-center gap-4 px-4 sm:px-6 lg:px-8 justify-end">
   <%= if @current_scope do %>
     <li>
