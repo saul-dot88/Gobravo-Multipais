@@ -27,7 +27,7 @@ defmodule BravoMultipais.Bank do
   defp build_mock_profile(country, app_attrs) do
     amount = to_float(app_attrs[:amount] || app_attrs["amount"])
     income = to_float(app_attrs[:monthly_income] || app_attrs["monthly_income"])
-    doc    = app_attrs[:document] || app_attrs["document"] || %{}
+    doc = app_attrs[:document] || app_attrs["document"] || %{}
 
     base_currency =
       case country do

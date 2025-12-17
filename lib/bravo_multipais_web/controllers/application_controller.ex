@@ -28,48 +28,48 @@ defmodule BravoMultipaisWeb.ApplicationController do
   end
 
   def create(conn, params) do
-  params =
-    params
-    |> normalize_document()
+    params =
+      params
+      |> normalize_document()
 
-  case CreditApplications.create_application(params) do
-    {:ok, app} ->
-      conn
-      |> put_status(:created)
-      |> json(app_to_public(app))
+    case CreditApplications.create_application(params) do
+      {:ok, app} ->
+        conn
+        |> put_status(:created)
+        |> json(app_to_public(app))
 
-    {:error, {:policy_error, reason}} ->
-      conn
-      |> put_status(:unprocessable_entity)
-      |> json(%{error: "policy_error", reason: inspect(reason)})
+      {:error, {:policy_error, reason}} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "policy_error", reason: inspect(reason)})
 
-    {:error, %Ecto.Changeset{} = changeset} ->
-      conn
-      |> put_status(:unprocessable_entity)
-      |> json(%{error: "validation_error", details: changeset_errors(changeset)})
-  end
-end
-
-defp normalize_document(%{"document" => %{} = _doc} = params) do
-  # Ya viene bien formado, lo usamos tal cual
-  params
-end
-
-defp normalize_document(%{"country" => country, "document_value" => value} = params) do
-  document =
-    case String.upcase(country) do
-      "IT" -> %{"codice_fiscale" => value}
-      "ES" -> %{"dni"            => value}
-      "PT" -> %{"nif"            => value}
-      _    -> %{"raw"            => value}
+      {:error, %Ecto.Changeset{} = changeset} ->
+        conn
+        |> put_status(:unprocessable_entity)
+        |> json(%{error: "validation_error", details: changeset_errors(changeset)})
     end
+  end
 
-  params
-  |> Map.put("document", document)
-  |> Map.delete("document_value")
-end
+  defp normalize_document(%{"document" => %{} = _doc} = params) do
+    # Ya viene bien formado, lo usamos tal cual
+    params
+  end
 
-defp normalize_document(params), do: params
+  defp normalize_document(%{"country" => country, "document_value" => value} = params) do
+    document =
+      case String.upcase(country) do
+        "IT" -> %{"codice_fiscale" => value}
+        "ES" -> %{"dni" => value}
+        "PT" -> %{"nif" => value}
+        _ -> %{"raw" => value}
+      end
+
+    params
+    |> Map.put("document", document)
+    |> Map.delete("document_value")
+  end
+
+  defp normalize_document(params), do: params
 
   # --- plugs privados ---
 

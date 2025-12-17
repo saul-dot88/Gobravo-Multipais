@@ -17,7 +17,7 @@ defmodule BravoMultipais.CreditApplications.Queries do
   @spec list_applications(map()) :: list(map())
   def list_applications(params \\ %{}) do
     country = Map.get(params, "country") || Map.get(params, :country)
-    status  = Map.get(params, "status")  || Map.get(params, :status)
+    status = Map.get(params, "status") || Map.get(params, :status)
 
     Application
     |> maybe_filter_country(country)
@@ -28,14 +28,14 @@ defmodule BravoMultipais.CreditApplications.Queries do
   end
 
   defp maybe_filter_country(query, nil), do: query
-  defp maybe_filter_country(query, ""),  do: query
+  defp maybe_filter_country(query, ""), do: query
 
   defp maybe_filter_country(query, country) do
     from a in query, where: a.country == ^country
   end
 
   defp maybe_filter_status(query, nil), do: query
-  defp maybe_filter_status(query, ""),  do: query
+  defp maybe_filter_status(query, ""), do: query
 
   defp maybe_filter_status(query, status) do
     from a in query, where: a.status == ^status

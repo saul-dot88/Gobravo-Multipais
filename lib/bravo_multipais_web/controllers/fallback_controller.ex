@@ -67,8 +67,7 @@ defmodule BravoMultipaisWeb.FallbackController do
            "Requested amount is too high relative to customer income"}
 
         :debt_to_income_too_high ->
-          {"debt_to_income_too_high",
-           "Debt-to-income ratio is higher than the allowed threshold"}
+          {"debt_to_income_too_high", "Debt-to-income ratio is higher than the allowed threshold"}
 
         :invalid_spanish_document ->
           {"invalid_document_es", "Invalid Spanish document (DNI / NIF / NIE)"}

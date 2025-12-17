@@ -33,9 +33,9 @@ defmodule BravoMultipais.Policies.IT do
 
   @impl true
   def business_rules(app, bank_profile) do
-    amount      = to_float(get(app, "amount") || Map.get(app, :amount))
-    income      = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
-    total_debt  = to_float(Map.get(bank_profile, :total_debt, 0))
+    amount = to_float(get(app, "amount") || Map.get(app, :amount))
+    income = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
 
     cond do
       income <= 0 ->
@@ -65,17 +65,19 @@ defmodule BravoMultipais.Policies.IT do
 
   @impl true
   def assess_risk(app, bank_profile) do
-    amount       = to_float(get(app, "amount") || Map.get(app, :amount))
-    income       = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
-    total_debt   = to_float(Map.get(bank_profile, :total_debt, 0))
-    avg_balance  = to_float(Map.get(bank_profile, :avg_balance, 0))
+    amount = to_float(get(app, "amount") || Map.get(app, :amount))
+    income = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
+    avg_balance = to_float(Map.get(bank_profile, :avg_balance, 0))
 
     external_score =
       Map.get(bank_profile, :score) ||
         Map.get(bank_profile, :credit_score, 680)
 
-    dti = safe_ratio(total_debt, income)   # debt-to-income
-    ati = safe_ratio(amount, income)      # amount-to-income
+    # debt-to-income
+    dti = safe_ratio(total_debt, income)
+    # amount-to-income
+    ati = safe_ratio(amount, income)
 
     raw_score =
       external_score * 0.4 +
@@ -90,7 +92,7 @@ defmodule BravoMultipais.Policies.IT do
       cond do
         score >= 730 -> "APPROVED"
         score >= 650 -> "UNDER_REVIEW"
-        true         -> "REJECTED"
+        true -> "REJECTED"
       end
 
     %{score: score, final_status: final_status}

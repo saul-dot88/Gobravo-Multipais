@@ -20,13 +20,24 @@ defmodule BravoMultipais.Accounts.Scope do
   @doc """
   Construye un scope a partir de un usuario.
 
+  Versión de 1 aridad: asume que no conoces `authenticated_at`.
+
   - Si el usuario es `nil`, regresamos `nil` (útil en pantallas públicas como login).
+  """
+  @spec for_user(User.t() | nil) :: t() | nil
+  def for_user(nil), do: nil
+  def for_user(%User{} = user), do: for_user(user, nil)
+
+  @doc """
+  Construye un scope a partir de un usuario y la fecha de autenticación.
+
+  - Si el usuario es `nil`, regresamos `nil`.
   - El rol se toma de `user.role` o `"external"` si viene `nil`.
   """
   @spec for_user(User.t() | nil, DateTime.t() | nil) :: t() | nil
   def for_user(nil, _authenticated_at), do: nil
 
-  def for_user(%User{} = user, authenticated_at \\ nil) do
+  def for_user(%User{} = user, authenticated_at) do
     %__MODULE__{
       user: user,
       role: user.role || "external",

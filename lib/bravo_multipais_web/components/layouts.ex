@@ -6,9 +6,6 @@ defmodule BravoMultipaisWeb.Layouts do
   use BravoMultipaisWeb, :html
 
   # Embed all files in layouts/* within this module.
-  # The default root.html.heex file contains the HTML
-  # skeleton of your application, namely HTML headers
-  # and other static content.
   embed_templates "layouts/*"
 
   @doc """
@@ -17,19 +14,13 @@ defmodule BravoMultipaisWeb.Layouts do
   This function is typically invoked from every template,
   and it often contains your application menu, sidebar,
   or similar.
-
-  ## Examples
-
-      <Layouts.app flash={@flash}>
-        <h1>Content</h1>
-      </Layouts.app>
-
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
 
-  attr :current_scope, :map,
+  # Es realmente tu Scope, no el concepto de "router scope"
+  attr :current_scope, :any,
     default: nil,
-    doc: "the current [scope](https://hexdocs.pm/phoenix/scopes.html)"
+    doc: "the current BravoMultipais.Accounts.Scope for the authenticated user"
 
   slot :inner_block, required: true
 
@@ -39,25 +30,46 @@ defmodule BravoMultipaisWeb.Layouts do
       <div class="flex-1">
         <a href="/" class="flex-1 flex w-fit items-center gap-2">
           <img src={~p"/images/logo.svg"} width="36" />
-          <span class="text-sm font-semibold">v{Application.spec(:phoenix, :vsn)}</span>
+          <span class="text-sm font-semibold">
+            v{Application.spec(:phoenix, :vsn)}
+          </span>
         </a>
       </div>
+
       <div class="flex-none">
         <ul class="flex flex-column px-1 space-x-4 items-center">
           <li>
-            <a href="https://phoenixframework.org/" class="btn btn-ghost">Website</a>
-          </li>
-          <li>
-            <a href="https://github.com/phoenixframework/phoenix" class="btn btn-ghost">GitHub</a>
-          </li>
-          <li>
             <.theme_toggle />
           </li>
-          <li>
-            <a href="https://hexdocs.pm/phoenix/overview.html" class="btn btn-primary">
-              Get Started <span aria-hidden="true">&rarr;</span>
-            </a>
-          </li>
+
+          <%= if @current_scope && @current_scope.user do %>
+            <!-- Usuario autenticado -->
+            <li class="text-sm">
+              {@current_scope.user.email}
+            </li>
+            <li>
+              <.link href={~p"/users/settings"} class="btn btn-ghost">
+                Settings
+              </.link>
+            </li>
+            <li>
+              <.link href={~p"/users/log-out"} method="delete" class="btn btn-ghost">
+                Log out
+              </.link>
+            </li>
+          <% else %>
+            <!-- Invitado (no autenticado) -->
+            <li>
+              <.link href={~p"/users/register"} class="btn btn-ghost">
+                Register
+              </.link>
+            </li>
+            <li>
+              <.link href={~p"/users/log-in"} class="btn btn-primary">
+                Log in
+              </.link>
+            </li>
+          <% end %>
         </ul>
       </div>
     </header>
@@ -74,10 +86,6 @@ defmodule BravoMultipaisWeb.Layouts do
 
   @doc """
   Shows the flash group with standard titles and content.
-
-  ## Examples
-
-      <.flash_group flash={@flash} />
   """
   attr :flash, :map, required: true, doc: "the map of flash messages"
   attr :id, :string, default: "flash-group", doc: "the optional id of flash container"
@@ -117,8 +125,6 @@ defmodule BravoMultipaisWeb.Layouts do
 
   @doc """
   Provides dark vs light theme toggle based on themes defined in app.css.
-
-  See <head> in root.html.heex which applies the theme before page load.
   """
   def theme_toggle(assigns) do
     ~H"""

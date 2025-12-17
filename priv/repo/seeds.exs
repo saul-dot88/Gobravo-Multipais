@@ -1,23 +1,34 @@
-alias BravoMultipais.{Repo, Accounts.User}
-alias Bcrypt
+# priv/repo/seeds.exs
 
-{:ok, _} = Application.ensure_all_started(:bcrypt_elixir)
+alias BravoMultipais.Accounts
 
-email = "admin@example.com"
+demo_email = "demo@bravo-multipais.dev"
+
+demo_attrs = %{
+  email: demo_email,
+  password: "secret1234",
+  # ajusta este valor para que sea compatible con tu Scope.for_user/1
+  role: "admin"
+}
 
 user =
-  Repo.get_by(User, email: email) ||
-    %User{email: email}
-    |> Ecto.Changeset.change(%{
-      hashed_password: Bcrypt.hash_pwd_salt("bravo_demo_1234"),
-      confirmed_at: DateTime.utc_now(),
-      role: "backoffice"
-    })
-    |> Repo.insert!()
+  case Accounts.get_user_by_email(demo_email) do
+    nil ->
+      # Ojo: si en tu contexto no se llama register_user/1,
+      # cámbialo por la función que uses para crear usuarios.
+      case Accounts.register_user(demo_attrs) do
+        {:ok, user} ->
+          IO.puts("Usuario demo creado: #{user.email}")
+          user
 
-IO.puts("""
-Seed backoffice user:
+        {:error, changeset} ->
+          IO.inspect(changeset.errors, label: " Error creando usuario demo")
+          raise "No se pudo crear el usuario demo"
+      end
 
-  email: #{email}
-  password: bravo_demo_1234
-""")
+    user ->
+      IO.puts("Usuario demo ya existía: #{user.email}")
+      user
+  end
+
+IO.inspect(user, label: "Usuario demo listo")

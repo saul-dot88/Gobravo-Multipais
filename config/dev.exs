@@ -88,5 +88,4 @@ config :phoenix_live_view,
 config :swoosh, :api_client, false
 
 # config/dev.exs
-config :bravo_multipais, BravoMultipais.Mailer,
-  adapter: Swoosh.Adapters.Local
+config :bravo_multipais, BravoMultipais.Mailer, adapter: Swoosh.Adapters.Local

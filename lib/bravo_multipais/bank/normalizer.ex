@@ -73,6 +73,7 @@ defmodule BravoMultipais.Bank.Normalizer do
   @spec build_document_map(String.t(), String.t() | nil) :: map()
   def build_document_map(country, raw_value) do
     IO.inspect(raw_value)
+
     value =
       raw_value
       |> safe_to_string()
@@ -112,5 +113,4 @@ defmodule BravoMultipais.Bank.Normalizer do
 
   defp safe_to_string(nil), do: ""
   defp safe_to_string(v), do: Kernel.to_string(v)
-
 end

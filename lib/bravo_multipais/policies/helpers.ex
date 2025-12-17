@@ -18,6 +18,7 @@ defmodule BravoMultipais.Policies.Helpers do
   def to_decimal(%D{} = d, _default), do: d
   def to_decimal(v, _default) when is_integer(v), do: D.new(v)
   def to_decimal(v, _default) when is_float(v), do: D.from_float(v)
+
   def to_decimal(v, default) when is_binary(v) do
     case D.new(v) do
       %D{} = d -> d
@@ -43,7 +44,8 @@ defmodule BravoMultipais.Policies.Helpers do
 
     case D.cmp(income, D.new("0")) do
       :gt -> D.div(amount, income)
-      _   -> D.new("1.0") # si income 0 asumimos riesgo máximo
+      # si income 0 asumimos riesgo máximo
+      _ -> D.new("1.0")
     end
   end
 

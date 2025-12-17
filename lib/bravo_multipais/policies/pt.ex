@@ -34,9 +34,9 @@ defmodule BravoMultipais.Policies.PT do
 
   @impl true
   def business_rules(app, bank_profile) do
-    amount       = to_float(get(app, "amount") || Map.get(app, :amount))
-    income       = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
-    total_debt   = to_float(Map.get(bank_profile, :total_debt, 0))
+    amount = to_float(get(app, "amount") || Map.get(app, :amount))
+    income = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
 
     dti = safe_ratio(total_debt, income)
 
@@ -57,9 +57,9 @@ defmodule BravoMultipais.Policies.PT do
 
   @impl true
   def next_status_on_creation(app, bank_profile) do
-    amount      = to_float(get(app, "amount") || Map.get(app, :amount))
-    income      = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
-    external    = Map.get(bank_profile, :score) || Map.get(bank_profile, :credit_score, 680)
+    amount = to_float(get(app, "amount") || Map.get(app, :amount))
+    income = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
+    external = Map.get(bank_profile, :score) || Map.get(bank_profile, :credit_score, 680)
 
     cond do
       amount > 18_000 ->
@@ -78,10 +78,10 @@ defmodule BravoMultipais.Policies.PT do
 
   @impl true
   def assess_risk(app, bank_profile) do
-    amount       = to_float(get(app, "amount") || Map.get(app, :amount))
-    income       = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
-    total_debt   = to_float(Map.get(bank_profile, :total_debt, 0))
-    avg_balance  = to_float(Map.get(bank_profile, :avg_balance, 0))
+    amount = to_float(get(app, "amount") || Map.get(app, :amount))
+    income = to_float(get(app, "monthly_income") || Map.get(app, :monthly_income))
+    total_debt = to_float(Map.get(bank_profile, :total_debt, 0))
+    avg_balance = to_float(Map.get(bank_profile, :avg_balance, 0))
 
     external_score =
       Map.get(bank_profile, :score) ||
@@ -104,7 +104,7 @@ defmodule BravoMultipais.Policies.PT do
       cond do
         score >= 720 -> "APPROVED"
         score >= 640 -> "UNDER_REVIEW"
-        true         -> "REJECTED"
+        true -> "REJECTED"
       end
 
     %{score: score, final_status: final_status}
@@ -128,11 +128,12 @@ defmodule BravoMultipais.Policies.PT do
       |> Enum.reduce(0, fn {digit, weight}, acc -> acc + digit * weight end)
 
     mod11 = rem(sum, 11)
+
     expected =
       case 11 - mod11 do
         10 -> 0
         11 -> 0
-        n  -> n
+        n -> n
       end
 
     check_digit == expected

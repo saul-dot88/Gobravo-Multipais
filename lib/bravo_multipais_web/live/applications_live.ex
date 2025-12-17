@@ -1,6 +1,8 @@
 defmodule BravoMultipaisWeb.ApplicationsLive do
   use BravoMultipaisWeb, :live_view
 
+  on_mount {BravoMultipaisWeb.UserAuth, :mount_current_scope}
+
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
   alias BravoMultipaisWeb.Endpoint
 
@@ -10,9 +12,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       Endpoint.subscribe("applications")
     end
 
-    filter = %{}
-
-    applications = Queries.list_applications(filter)
+    applications = Queries.list_applications(%{})
 
     {:ok,
      socket
@@ -23,51 +23,58 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
      |> assign(:filter_status, "")
      |> assign(:form, empty_form())
      |> assign(:selected_app, nil)
-     |> assign(:form, %{
-     "country" => "ES",
-     "full_name" => "",
-     "document_value" => "",
-     "amount" => "",
-     "monthly_income" => ""
-     })
      |> assign(:error_message, nil)
      |> assign(:success_message, nil)}
   end
 
   @impl true
   def handle_event("create_application", params, socket) do
-      country         = params["country"] || params[:country]
-      document_value  = params["document_value"] || ""
+    attrs = build_attrs_from_params(params)
 
-      document =
-        case country do
-          "IT" -> %{"codice_fiscale" => document_value}
-          "ES" -> %{"dni"            => document_value}
-          "PT" -> %{"nif"            => document_value}
-          _    -> %{"raw"            => document_value}
-        end
+    case Commands.create_application(attrs) do
+      {:ok, app} ->
+        applications = Queries.list_applications(%{})
 
-      params =
-        params
-        |> Map.put("document", document)
-        |> Map.delete("document_value")
+        {:noreply,
+         socket
+         |> put_flash(:info, "Application created (#{app.country} - #{app.status})")
+         |> assign(:applications, applications)
+         |> assign(:form, empty_form())
+         |> assign(:error_message, nil)
+         |> assign(:success_message, "Solicitud creada correctamente.")}
 
-      case CreditApplications.create_application(params) do
-        {:ok, app} ->
-          # recargar lista, limpiar form, mostrar flash, etc
-          {:noreply,
-          socket
-          |> put_flash(:info, "Application created (#{app.country} - #{app.status})")
-          |> assign(:applications, CreditApplications.list_applications(%{}))
-          |> assign(:changeset, CreditApplications.change_application())}
+      {:error, {:policy_error, reason}} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Business rule failed: #{inspect(reason)}")
+         |> assign(:error_message, "Regla de negocio falló: #{inspect(reason)}")}
 
-        {:error, {:policy_error, reason}} ->
-          {:noreply, put_flash(socket, :error, "Business rule failed: #{inspect(reason)}")}
+      {:error, {:invalid_changeset, changeset}} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Payload inválido para crear la solicitud.")
+         |> assign(:error_message, "Errores de validación en la solicitud.")
+         |> assign(:changeset, changeset)}
 
-        {:error, %Ecto.Changeset{} = changeset} ->
-          {:noreply, assign(socket, :changeset, changeset)}
-      end
+      {:error, :invalid_payload} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Payload inválido: falta país o documento.")
+         |> assign(:error_message, "Faltan datos obligatorios (país/documento).")}
+
+      {:error, {:job_enqueue_failed, reason}} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "La solicitud se guardó, pero falló el job de riesgo.")
+         |> assign(:error_message, "Job de riesgo no pudo encolarse: #{inspect(reason)}")}
+
+      {:error, other} ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Ocurrió un error inesperado al crear la solicitud.")
+         |> assign(:error_message, "Error inesperado: #{inspect(other)}")}
     end
+  end
 
   @impl true
   def handle_event("filter", %{"country" => country, "status" => status}, socket) do
@@ -133,7 +140,458 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
      |> assign(:selected_app, selected_app)}
   end
 
-  # Helpers
+  @impl true
+  def handle_info(
+        %Phoenix.Socket.Broadcast{
+          topic: "applications",
+          event: "updated",
+          payload: %{id: id}
+        },
+        socket
+      ) do
+    applications =
+      Queries.list_applications(%{
+        country: socket.assigns.filter_country,
+        status: socket.assigns.filter_status
+      })
+
+    selected_app =
+      case socket.assigns.selected_app do
+        %Application{id: ^id} ->
+          Queries.get_application(id)
+
+        other ->
+          other
+      end
+
+    {:noreply,
+     socket
+     |> assign(applications: applications, selected_app: selected_app)}
+  end
+
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
+  end
+
+  # ======================
+  # render + components
+  # ======================
+
+  @impl true
+  def render(assigns) do
+    ~H"""
+    <Layouts.app flash={@flash} current_scope={@current_scope}>
+      <div class="min-h-screen bg-slate-100 py-8">
+        <div class="max-w-6xl mx-auto px-4">
+          <.backoffice_header current_scope={@current_scope} />
+          <.applications_panel {assigns} />
+        </div>
+      </div>
+    </Layouts.app>
+    """
+  end
+
+  # Header con info de usuario + rol
+  defp backoffice_header(assigns) do
+    ~H"""
+    <div class="mb-6">
+      <h1 class="text-3xl font-bold text-slate-800 mb-1">
+        Solicitudes de Crédito Multipaís
+      </h1>
+
+      <%= if @current_scope do %>
+        <p class="text-sm text-slate-500">
+          Sesión iniciada como
+          <span class="font-semibold">
+            {@current_scope.user.email}
+          </span>
+          · rol:
+          <span class="font-mono">
+            {@current_scope.role}
+          </span>
+        </p>
+
+        <%= if backoffice?(@current_scope) do %>
+          <div class="mt-2 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+            <strong>Demo backoffice:</strong>
+            este panel está pensado para usuarios con rol <code>backoffice</code>.
+          </div>
+        <% else %>
+          <div class="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
+            <strong>Vista limitada:</strong>
+            algunas columnas y detalles están ocultos para tu rol.
+          </div>
+        <% end %>
+      <% else %>
+        <p class="text-sm text-slate-500">
+          No hay scope de usuario cargado. Esta vista debería usarse detrás de login.
+        </p>
+      <% end %>
+    </div>
+    """
+  end
+
+  # Panel principal (form + tabla + detalle)
+  defp applications_panel(assigns) do
+    ~H"""
+    <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+      <!-- Panel de creación -->
+      <div class="lg:col-span-1">
+        <div class="bg-white shadow rounded-2xl p-6 space-y-4">
+          <h2 class="text-xl font-semibold text-slate-800 mb-2">
+            Nueva solicitud
+          </h2>
+
+          <p class="text-sm text-slate-500 mb-4">
+            Elige país, captura datos básicos del cliente y el sistema evaluará el riesgo en segundo plano.
+          </p>
+
+          <%= if @error_message do %>
+            <div class="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
+              <strong>Error:</strong> {@error_message}
+            </div>
+          <% end %>
+
+          <%= if @success_message do %>
+            <div class="mb-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
+              {@success_message}
+            </div>
+          <% end %>
+
+          <form phx-submit="create_application" class="space-y-4">
+            <!-- País -->
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">
+                País
+              </label>
+              <select
+                name="country"
+                class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
+              >
+                <%= for c <- @countries do %>
+                  <option value={c} selected={@form["country"] == c}>{c}</option>
+                <% end %>
+              </select>
+            </div>
+
+            <!-- Nombre completo -->
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">
+                Nombre completo
+              </label>
+              <input
+                type="text"
+                name="full_name"
+                value={@form["full_name"]}
+                placeholder="Ej. Juan Pérez"
+                class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
+                required
+              />
+            </div>
+
+            <!-- Documento -->
+            <div>
+              <label class="block text-sm font-medium text-slate-700 mb-1">
+                Documento (DNI / Codice Fiscale / NIF)
+              </label>
+              <input
+                type="text"
+                name="document_value"
+                value={@form["document_value"]}
+                placeholder="Dependiendo del país: DNI, CF, NIF..."
+                class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
+                required
+              />
+            </div>
+
+            <!-- Monto e ingreso -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">
+                  Monto solicitado
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  name="amount"
+                  value={@form["amount"]}
+                  placeholder="Ej. 5000"
+                  class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  required
+                />
+              </div>
+
+              <div>
+                <label class="block text-sm font-medium text-slate-700 mb-1">
+                  Ingreso mensual
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  name="monthly_income"
+                  value={@form["monthly_income"]}
+                  placeholder="Ej. 2000"
+                  class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
+                  required
+                />
+              </div>
+            </div>
+
+            <div class="pt-2">
+              <button
+                type="submit"
+                class="inline-flex items-center justify-center px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 w-full"
+              >
+                Crear solicitud
+              </button>
+            </div>
+          </form>
+        </div>
+      </div>
+
+      <!-- Panel de lista -->
+      <div class="lg:col-span-2">
+        <div class="bg-white shadow rounded-2xl p-6">
+          <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-4">
+            <div>
+              <h2 class="text-xl font-semibold text-slate-800">
+                Solicitudes recientes
+              </h2>
+              <p class="text-sm text-slate-500">
+                Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
+              </p>
+            </div>
+
+            <!-- Filtros -->
+            <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  País
+                </label>
+                <select
+                  name="country"
+                  class="block w-32 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                >
+                  <option value="">Todos</option>
+                  <%= for c <- @countries do %>
+                    <option value={c} selected={@filter_country == c}>{c}</option>
+                  <% end %>
+                </select>
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  Estado
+                </label>
+                <select
+                  name="status"
+                  class="block w-40 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                >
+                  <option value="">Todos</option>
+                  <%= for s <- @statuses do %>
+                    <option value={s} selected={@filter_status == s}>{s}</option>
+                  <% end %>
+                </select>
+              </div>
+            </form>
+          </div>
+
+          <div class="overflow-x-auto">
+            <table class="min-w-full text-sm">
+              <thead>
+                <tr class="border-b border-slate-200 bg-slate-50">
+                  <th class="text-left py-2 px-3 font-medium text-slate-600">País</th>
+                  <th class="text-left py-2 px-3 font-medium text-slate-600">Nombre</th>
+                  <th class="text-right py-2 px-3 font-medium text-slate-600">Monto</th>
+                  <th class="text-right py-2 px-3 font-medium text-slate-600">Ingreso</th>
+                  <th class="text-center py-2 px-3 font-medium text-slate-600">Estado</th>
+
+                  <%= if backoffice?(@current_scope) do %>
+                    <th class="text-center py-2 px-3 font-medium text-slate-600">Score</th>
+                  <% end %>
+
+                  <th class="text-right py-2 px-3 font-medium text-slate-600">Creada</th>
+                </tr>
+              </thead>
+              <tbody>
+                <%= if @applications == [] do %>
+                  <tr>
+                    <td colspan="7" class="text-center text-slate-400 py-6">
+                      Aún no hay solicitudes. Crea la primera desde el panel izquierdo.
+                    </td>
+                  </tr>
+                <% else %>
+                  <%= for app <- @applications do %>
+                    <tr
+                      phx-click="select_app"
+                      phx-value-id={app.id}
+                      class={[
+                        "border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer",
+                        @selected_app && @selected_app.id == app.id && "bg-indigo-50/60"
+                      ]}
+                    >
+                      <!-- País -->
+                      <td class="py-2 px-3">
+                        {country_badge(app.country)}
+                      </td>
+
+                      <!-- Nombre -->
+                      <td class="py-2 px-3 text-slate-800">
+                        {app.full_name}
+                      </td>
+
+                      <!-- Monto -->
+                      <td class="py-2 px-3 text-right tabular-nums text-slate-700">
+                        € {app.amount}
+                      </td>
+
+                      <!-- Ingreso mensual -->
+                      <td class="py-2 px-3 text-right tabular-nums text-slate-700">
+                        € {app.monthly_income}
+                      </td>
+
+                      <!-- Estado -->
+                      <td class="py-2 px-3 text-center">
+                        {status_badge(app.status)}
+                      </td>
+
+                      <!-- Score: sólo backoffice ve el chip -->
+                      <%= if backoffice?(@current_scope) do %>
+                        <td class="py-2 px-3 text-center">
+                          {risk_score_chip(app.risk_score)}
+                        </td>
+                      <% end %>
+
+                      <!-- Fecha creación -->
+                      <td class="py-2 px-3 text-right text-xs text-slate-500">
+                        {Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M")}
+                      </td>
+                    </tr>
+                  <% end %>
+                <% end %>
+              </tbody>
+            </table>
+          </div>
+
+          <!-- Panel de detalle -->
+          <div class="mt-6">
+            <%= if @selected_app do %>
+              <div class="border border-slate-200 rounded-2xl p-4 bg-slate-50">
+                <div class="flex items-start justify-between gap-4">
+                  <div>
+                    <h3 class="text-sm font-semibold text-slate-800 mb-1">
+                      Detalle de solicitud
+                    </h3>
+                    <p class="text-xs text-slate-500">
+                      ID: <span class="font-mono">{@selected_app.id}</span>
+                    </p>
+                  </div>
+
+                  <button
+                    type="button"
+                    phx-click="clear_selection"
+                    class="text-xs text-slate-500 hover:text-slate-700"
+                  >
+                    Cerrar
+                  </button>
+                </div>
+
+                <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                  <!-- Columna 1 -->
+                  <div class="space-y-1">
+                    <p>
+                      <span class="font-medium text-slate-600">País:</span>
+                      <span class="ml-1 font-mono text-xs">{@selected_app.country}</span>
+                    </p>
+                    <p>
+                      <span class="font-medium text-slate-600">Nombre:</span>
+                      <span class="ml-1 text-slate-800">{@selected_app.full_name}</span>
+                    </p>
+                    <p>
+                      <span class="font-medium text-slate-600">Documento:</span>
+                      <span class="ml-1 text-slate-800">
+                        {render_document(@selected_app.country, @selected_app.document)}
+                      </span>
+                    </p>
+                  </div>
+
+                  <!-- Columna 2 -->
+                  <div class="space-y-1">
+                    <p>
+                      <span class="font-medium text-slate-600">Monto:</span>
+                      <span class="ml-1">€ {@selected_app.amount}</span>
+                    </p>
+                    <p>
+                      <span class="font-medium text-slate-600">Ingreso mensual:</span>
+                      <span class="ml-1">€ {@selected_app.monthly_income}</span>
+                    </p>
+                    <p class="flex items-center gap-2">
+                      <span class="font-medium text-slate-600">Estado:</span>
+                      {status_badge(@selected_app.status)}
+                    </p>
+                    <p>
+                      <span class="font-medium text-slate-600">Score de riesgo:</span>
+                      <%= if @selected_app.risk_score do %>
+                        <span class="ml-1 font-mono text-xs">{@selected_app.risk_score}</span>
+                      <% else %>
+                        <span class="ml-1 text-xs text-slate-400 italic">pendiente</span>
+                      <% end %>
+                    </p>
+                  </div>
+
+                  <!-- Columna 3 -->
+                  <div class="space-y-1">
+                    <%= if backoffice?(@current_scope) do %>
+                      <%= if @selected_app.bank_profile do %>
+                        <% profile = @selected_app.bank_profile %>
+                        <% total_debt = map_get(profile, [:total_debt]) %>
+                        <% avg_balance = map_get(profile, [:avg_balance]) %>
+                        <% external_id = map_get(profile, [:external_id]) %>
+                        <% currency = map_get(profile, [:currency]) || "EUR" %>
+
+                        <p>
+                          <span class="font-medium text-slate-600">Identificador externo:</span>
+                          <span class="ml-1 text-xs font-mono">{external_id}</span>
+                        </p>
+                        <p>
+                          <span class="font-medium text-slate-600">Deuda total:</span>
+                          <span class="ml-1">
+                            {currency} {total_debt || "N/D"}
+                          </span>
+                        </p>
+                        <p>
+                          <span class="font-medium text-slate-600">Saldo promedio:</span>
+                          <span class="ml-1">
+                            {currency} {avg_balance || "N/D"}
+                          </span>
+                        </p>
+                      <% else %>
+                        <p class="text-xs text-slate-400 italic">
+                          Sin información bancaria disponible.
+                        </p>
+                      <% end %>
+                    <% else %>
+                      <p class="text-xs text-slate-400 italic">
+                        Información bancaria disponible sólo para usuarios backoffice.
+                      </p>
+                    <% end %>
+                  </div>
+                </div>
+              </div>
+            <% end %>
+          </div>
+        </div>
+      </div>
+    </div>
+    """
+  end
+
+  # ======================
+  # Helpers de datos/roles
+  # ======================
 
   defp empty_form do
     %{
@@ -172,518 +630,100 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   defp maybe_put(map, _key, nil), do: map
   defp maybe_put(map, key, value), do: Map.put(map, key, value)
 
-  @impl true
-  def render(assigns) do
+  # ======================
+  # UI helpers
+  # ======================
+
+  defp country_badge(country) do
+    {flag, label} =
+      case country do
+        "ES" -> {"🇪🇸", "ES"}
+        "IT" -> {"🇮🇹", "IT"}
+        "PT" -> {"🇵🇹", "PT"}
+        other -> {"🌍", to_string(other || "N/A")}
+      end
+
+    assigns = %{flag: flag, label: label}
+
     ~H"""
-    <div class="min-h-screen bg-slate-100 py-8">
-      <div class="max-w-6xl mx-auto px-4">
-        <h1 class="text-3xl font-bold text-slate-800 mb-6">
-          Solicitudes de Crédito Multipaís
-        </h1>
-
-        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-          <!-- Panel de creación -->
-          <div class="lg:col-span-1">
-            <div class="bg-white shadow rounded-2xl p-6 space-y-4">
-              <h2 class="text-xl font-semibold text-slate-800 mb-2">
-                Nueva solicitud
-              </h2>
-
-              <p class="text-sm text-slate-500 mb-4">
-                Elige país, captura datos básicos del cliente y el sistema evaluará el riesgo en segundo plano.
-              </p>
-
-              <%= if @error_message do %>
-                <div class="mb-3 text-sm text-red-700 bg-red-50 border border-red-200 rounded-lg px-3 py-2">
-                  <strong>Error:</strong> <%= @error_message %>
-                </div>
-              <% end %>
-
-              <%= if @success_message do %>
-                <div class="mb-3 text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg px-3 py-2">
-                  <%= @success_message %>
-                </div>
-              <% end %>
-
-              <form phx-submit="create_application" class="space-y-4">
-                <!-- País -->
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">
-                    País
-                  </label>
-                  <select
-                    name="country"
-                    class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
-                  >
-                    <%= for c <- @countries do %>
-                      <option value={c} selected={@form["country"] == c}><%= c %></option>
-                    <% end %>
-                  </select>
-                </div>
-
-                <!-- Nombre completo -->
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">
-                    Nombre completo
-                  </label>
-                  <input
-                    type="text"
-                    name="full_name"
-                    value={@form["full_name"]}
-                    placeholder="Ej. Juan Pérez"
-                    class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
-                    required
-                  />
-                </div>
-
-                <!-- Documento -->
-                <div>
-                  <label class="block text-sm font-medium text-slate-700 mb-1">
-                    Documento (DNI / Codice Fiscale / NIF)
-                  </label>
-                  <input
-                    type="text"
-                    name="document_value"
-                    value={@form["document_value"]}
-                    placeholder="Dependiendo del país: DNI, CF, NIF..."
-                    class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
-                    required
-                  />
-                </div>
-
-                <!-- Monto e ingreso -->
-                <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">
-                      Monto solicitado
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      name="amount"
-                      value={@form["amount"]}
-                      placeholder="Ej. 5000"
-                      class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
-                      required
-                    />
-                  </div>
-
-                  <div>
-                    <label class="block text-sm font-medium text-slate-700 mb-1">
-                      Ingreso mensual
-                    </label>
-                    <input
-                      type="number"
-                      step="0.01"
-                      min="0"
-                      name="monthly_income"
-                      value={@form["monthly_income"]}
-                      placeholder="Ej. 2000"
-                      class="block w-full rounded-xl border-slate-300 shadow-sm text-sm focus:border-indigo-500 focus:ring-indigo-500"
-                      required
-                    />
-                  </div>
-                </div>
-
-                <div class="pt-2">
-                  <button
-                    type="submit"
-                    class="inline-flex items-center justify-center px-4 py-2 rounded-xl text-sm font-semibold text-white bg-indigo-600 hover:bg-indigo-700 shadow-sm focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-indigo-500 w-full"
-                  >
-                    Crear solicitud
-                  </button>
-                </div>
-              </form>
-            </div>
-          </div>
-
-          <!-- Panel de lista -->
-          <div class="lg:col-span-2">
-            <div class="bg-white shadow rounded-2xl p-6">
-              <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-4">
-                <div>
-                  <h2 class="text-xl font-semibold text-slate-800">
-                    Solicitudes recientes
-                  </h2>
-                  <p class="text-sm text-slate-500">
-                    Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
-                  </p>
-                </div>
-
-                <!-- Filtros -->
-                <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1">
-                      País
-                    </label>
-                    <select
-                      name="country"
-                      class="block w-32 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                    >
-                      <option value="">Todos</option>
-                      <%= for c <- @countries do %>
-                        <option value={c} selected={@filter_country == c}><%= c %></option>
-                      <% end %>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label class="block text-xs font-medium text-slate-600 mb-1">
-                      Estado
-                    </label>
-                    <select
-                      name="status"
-                      class="block w-40 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
-                    >
-                      <option value="">Todos</option>
-                      <%= for s <- @statuses do %>
-                        <option value={s} selected={@filter_status == s}><%= s %></option>
-                      <% end %>
-                    </select>
-                  </div>
-                </form>
-              </div>
-
-              <div class="overflow-x-auto">
-                <table class="min-w-full text-sm">
-                  <thead>
-                    <tr class="border-b border-slate-200 bg-slate-50">
-                      <th class="text-left py-2 px-3 font-medium text-slate-600">País</th>
-                      <th class="text-left py-2 px-3 font-medium text-slate-600">Nombre</th>
-                      <th class="text-right py-2 px-3 font-medium text-slate-600">Monto</th>
-                      <th class="text-right py-2 px-3 font-medium text-slate-600">Ingreso</th>
-                      <th class="text-center py-2 px-3 font-medium text-slate-600">Estado</th>
-                      <th class="text-center py-2 px-3 font-medium text-slate-600">Score</th>
-                      <th class="text-right py-2 px-3 font-medium text-slate-600">Creada</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    <%= if @applications == [] do %>
-                      <tr>
-                        <td colspan="7" class="text-center text-slate-400 py-6">
-                          Aún no hay solicitudes. Crea la primera desde el panel izquierdo.
-                        </td>
-                      </tr>
-                    <% else %>
-                      <%= for app <- @applications do %>
-                        <tr
-                          phx-click="select_app"
-                          phx-value-id={app.id}
-                          class={[
-                            "border-b border-slate-100 hover:bg-slate-50 transition-colors cursor-pointer",
-                            @selected_app && @selected_app.id == app.id && "bg-indigo-50/60"
-                          ]}
-                        >
-                          <!-- País -->
-                          <td class="py-2 px-3">
-                            <%= country_badge(app.country) %>
-                          </td>
-
-                          <!-- Nombre -->
-                          <td class="py-2 px-3 text-slate-800">
-                            <%= app.full_name %>
-                          </td>
-
-                          <!-- Monto -->
-                          <td class="py-2 px-3 text-right tabular-nums text-slate-700">
-                            € <%= app.amount %>
-                          </td>
-
-                          <!-- Ingreso mensual -->
-                          <td class="py-2 px-3 text-right tabular-nums text-slate-700">
-                            € <%= app.monthly_income %>
-                          </td>
-
-                          <!-- Estado -->
-                          <td class="py-2 px-3 text-center">
-                            <%= status_badge(app.status) %>
-                          </td>
-
-                          <!-- Score -->
-                          <td class="py-2 px-3 text-center">
-                            <%= risk_score_chip(app.risk_score) %>
-                          </td>
-
-                          <!-- Fecha creación -->
-                          <td class="py-2 px-3 text-right text-xs text-slate-500">
-                            <%= Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M") %>
-                          </td>
-                        </tr>
-                      <% end %>
-                    <% end %>
-                  </tbody>
-                </table>
-              </div>
-
-              <!-- Panel de detalle -->
-              <div class="mt-6">
-                <%= if @selected_app do %>
-                  <div class="border border-slate-200 rounded-2xl p-4 bg-slate-50">
-                    <div class="flex items-start justify-between gap-4">
-                      <div>
-                        <h3 class="text-sm font-semibold text-slate-800 mb-1">
-                          Detalle de solicitud
-                        </h3>
-                        <p class="text-xs text-slate-500">
-                          ID:
-                          <span class="font-mono"><%= @selected_app.id %></span>
-                        </p>
-                      </div>
-
-                      <button
-                        type="button"
-                        phx-click="clear_selection"
-                        class="text-xs text-slate-500 hover:text-slate-700"
-                      >
-                        Cerrar
-                      </button>
-                    </div>
-
-                    <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                      <!-- Columna 1 -->
-                      <div class="space-y-1">
-                        <p>
-                          <span class="font-medium text-slate-600">País:</span>
-                          <span class="ml-1 font-mono text-xs"><%= @selected_app.country %></span>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Nombre:</span>
-                          <span class="ml-1 text-slate-800"><%= @selected_app.full_name %></span>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Documento:</span>
-                          <span class="ml-1 text-slate-800">
-                            <%= render_document(@selected_app.country, @selected_app.document) %>
-                          </span>
-                        </p>
-                      </div>
-
-                      <!-- Columna 2 -->
-                      <div class="space-y-1">
-                        <p>
-                          <span class="font-medium text-slate-600">Monto:</span>
-                          <span class="ml-1">€ <%= @selected_app.amount %></span>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Ingreso mensual:</span>
-                          <span class="ml-1">€ <%= @selected_app.monthly_income %></span>
-                        </p>
-                        <p class="flex items-center gap-2">
-                          <span class="font-medium text-slate-600">Estado:</span>
-                          <%= status_badge(@selected_app.status) %>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Score de riesgo:</span>
-                          <%= if @selected_app.risk_score do %>
-                            <span class="ml-1 font-mono text-xs"><%= @selected_app.risk_score %></span>
-                          <% else %>
-                            <span class="ml-1 text-xs text-slate-400 italic">pendiente</span>
-                          <% end %>
-                        </p>
-                      </div>
-
-                      <!-- Columna 3 -->
-                      <div class="space-y-1">
-                        <%= if @selected_app.bank_profile do %>
-                          <% profile = @selected_app.bank_profile %>
-                          <% total_debt = map_get(profile, [:total_debt]) %>
-                          <% avg_balance = map_get(profile, [:avg_balance]) %>
-                          <% external_id = map_get(profile, [:external_id]) %>
-                          <% currency = map_get(profile, [:currency]) || "EUR" %>
-
-                          <p>
-                            <span class="font-medium text-slate-600">Identificador externo:</span>
-                            <span class="ml-1 text-xs font-mono"><%= external_id %></span>
-                          </p>
-                          <p>
-                            <span class="font-medium text-slate-600">Deuda total:</span>
-                            <span class="ml-1">
-                              <%= currency %> <%= total_debt || "N/D" %>
-                            </span>
-                          </p>
-                          <p>
-                            <span class="font-medium text-slate-600">Saldo promedio:</span>
-                            <span class="ml-1">
-                              <%= currency %> <%= avg_balance || "N/D" %>
-                            </span>
-                          </p>
-                        <% else %>
-                          <p class="text-xs text-slate-400 italic">
-                            Sin información bancaria disponible.
-                          </p>
-                        <% end %>
-                      </div>
-                    </div>
-                  </div>
-                <% end %>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
+      <span>{@flag}</span>
+      <span>{@label}</span>
+    </span>
     """
   end
 
-  defp country_options do
-  [
-    {"Spain (ES)", "ES"},
-    {"Italy (IT)", "IT"},
-    {"Portugal (PT)", "PT"}
-  ]
-end
+  defp status_badge(status) do
+    {label, classes} =
+      case status do
+        "APPROVED" ->
+          {"Aprobada", "bg-emerald-50 text-emerald-700 border-emerald-200"}
 
-defp document_label(%Ecto.Changeset{} = changeset) do
-  case Ecto.Changeset.get_field(changeset, :country) do
-    "ES" -> "DNI"
-    "IT" -> "Codice Fiscale"
-    "PT" -> "NIF"
-    _    -> "Document"
+        "UNDER_REVIEW" ->
+          {"En revisión", "bg-amber-50 text-amber-700 border-amber-200"}
+
+        "REJECTED" ->
+          {"Rechazada", "bg-rose-50 text-rose-700 border-rose-200"}
+
+        "PENDING_RISK" ->
+          {"En evaluación de riesgo", "bg-slate-100 text-slate-600 border-slate-200"}
+
+        other ->
+          {other || "Desconocido", "bg-slate-100 text-slate-600 border-slate-200"}
+      end
+
+    assigns = %{label: label, classes: classes, status: status}
+
+    ~H"""
+    <span class={
+      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
+    }>
+      <span
+        :if={@status in ["PENDING_RISK", "UNDER_REVIEW"]}
+        class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"
+      />
+      {@label}
+    </span>
+    """
   end
-end
 
-defp document_placeholder(%Ecto.Changeset{} = changeset) do
-  case Ecto.Changeset.get_field(changeset, :country) do
-    "ES" -> "12345678Z"
-    "IT" -> "BNCMRC80A01F208Y"
-    "PT" -> "123456789"
-    _    -> "Document identifier"
+  defp risk_score_chip(nil) do
+    assigns = %{}
+
+    ~H"""
+    <span class="text-xs text-slate-400 italic">
+      Pendiente
+    </span>
+    """
   end
-end
 
+  defp risk_score_chip(score) do
+    {classes, label} =
+      cond do
+        is_nil(score) ->
+          {"bg-slate-100 text-slate-500 border-slate-200", "Pendiente"}
 
-@impl true
-def handle_info(
-      %Phoenix.Socket.Broadcast{
-        topic: "applications",
-        event: "updated",
-        payload: %{id: id}
-      },
-      socket
-    ) do
-  # recarga lista respetando filtros actuales
-  applications =
-    Queries.list_applications(%{
-      country: socket.assigns.filter_country,
-      status: socket.assigns.filter_status
-    })
+        score >= 730 ->
+          {"bg-emerald-50 text-emerald-700 border-emerald-200", "Alto"}
 
-  # si justo la seleccionada es la que se actualizó, recárgala desde la BD
-  selected_app =
-    case socket.assigns.selected_app do
-      %Application{id: ^id} ->
-        Queries.get_application(id)
+        score >= 650 ->
+          {"bg-amber-50 text-amber-700 border-amber-200", "Medio"}
 
-      other ->
-        other
-    end
+        true ->
+          {"bg-rose-50 text-rose-700 border-rose-200", "Bajo"}
+      end
 
-  {:noreply,
-   socket
-   |> assign(applications: applications, selected_app: selected_app)}
-end
+    assigns = %{score: score, classes: classes, label: label}
 
-@impl true
-def handle_info(_msg, socket) do
-  {:noreply, socket}
-end
-
-  # Chip de país con banderita
-defp country_badge(country) do
-  {flag, label} =
-    case country do
-      "ES" -> {"🇪🇸", "ES"}
-      "IT" -> {"🇮🇹", "IT"}
-      "PT" -> {"🇵🇹", "PT"}
-      other -> {"🌍", to_string(other || "N/A")}
-    end
-
-  assigns = %{flag: flag, label: label}
-
-  ~H"""
-  <span class="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700">
-    <span><%= @flag %></span>
-    <span><%= @label %></span>
-  </span>
-  """
-end
-
-# Badge de estado con colores y “en evaluación” animado
-defp status_badge(status) do
-  {label, classes} =
-    case status do
-      "APPROVED" ->
-        {"Aprobada", "bg-emerald-50 text-emerald-700 border-emerald-200"}
-
-      "UNDER_REVIEW" ->
-        {"En revisión", "bg-amber-50 text-amber-700 border-amber-200"}
-
-      "REJECTED" ->
-        {"Rechazada", "bg-rose-50 text-rose-700 border-rose-200"}
-
-      "PENDING_RISK" ->
-        {"En evaluación de riesgo", "bg-slate-100 text-slate-600 border-slate-200"}
-
-      other ->
-        {other || "Desconocido", "bg-slate-100 text-slate-600 border-slate-200"}
-    end
-
-  assigns = %{label: label, classes: classes, status: status}
-
-  ~H"""
-  <span class={
-    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
-  }>
-    <span
-      :if={@status in ["PENDING_RISK", "UNDER_REVIEW"]}
-      class="h-1.5 w-1.5 rounded-full bg-amber-400 animate-pulse"
-    />
-    <%= @label %>
-  </span>
-  """
-end
-
-# Chip de score con indicador Alto / Medio / Bajo
-defp risk_score_chip(nil) do
-  assigns = %{}
-
-  ~H"""
-  <span class="text-xs text-slate-400 italic">
-    Pendiente
-  </span>
-  """
-end
-
-defp risk_score_chip(score) do
-  {classes, label} =
-    cond do
-      is_nil(score) ->
-        {"bg-slate-100 text-slate-500 border-slate-200", "Pendiente"}
-
-      score >= 730 ->
-        {"bg-emerald-50 text-emerald-700 border-emerald-200", "Alto"}
-
-      score >= 650 ->
-        {"bg-amber-50 text-amber-700 border-amber-200", "Medio"}
-
-      true ->
-        {"bg-rose-50 text-rose-700 border-rose-200", "Bajo"}
-    end
-
-  assigns = %{score: score, classes: classes, label: label}
-
-  ~H"""
-  <span class={
-    "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
-  }>
-    <span :if={@score} class="font-mono"><%= @score %></span>
-    <span :if={@score} class="text-[10px] uppercase tracking-wide"><%= @label %></span>
-  </span>
-  """
-end
-
-  # Documento según país
+    ~H"""
+    <span class={
+      "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium " <> @classes
+    }>
+      <span :if={@score} class="font-mono">{@score}</span>
+      <span :if={@score} class="text-[10px] uppercase tracking-wide">{@label}</span>
+    </span>
+    """
+  end
 
   defp render_document("ES", doc) when is_map(doc) do
     doc["dni"] || doc[:dni] || doc["nif"] || doc[:nif] || doc["nie"] || doc[:nie] || "N/D"
@@ -703,12 +743,14 @@ end
 
   defp render_document(_country, _), do: "N/D"
 
-  # Helper para leer de map con keys string o atom
-
   defp map_get(map, [key]) do
-    Map.get(map, key) || Map.get(map, to_string(key)) ||
+    Map.get(map, key) ||
+      Map.get(map, to_string(key)) ||
       Map.get(map, String.to_atom("#{key}"))
   rescue
     ArgumentError -> Map.get(map, key) || Map.get(map, to_string(key))
   end
+
+  defp backoffice?(%{role: "backoffice"}), do: true
+  defp backoffice?(_), do: false
 end

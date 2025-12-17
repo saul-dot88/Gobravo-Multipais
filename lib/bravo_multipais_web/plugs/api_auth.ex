@@ -11,7 +11,8 @@ defmodule BravoMultipaisWeb.ApiAuth do
 
   @behaviour Plug
 
-  @token_max_age 86_400  # 24 horas
+  # 24 horas
+  @token_max_age 86_400
 
   @impl true
   def init(opts), do: opts

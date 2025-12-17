@@ -80,7 +80,11 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   end
 
   defp webhook_url do
-    Application.get_env(:bravo_multipais, :webhook_url, "http://localhost:4001/webhooks/applications")
+    Application.get_env(
+      :bravo_multipais,
+      :webhook_url,
+      "http://localhost:4001/webhooks/applications"
+    )
   end
 
   defp fake_signature(body) do

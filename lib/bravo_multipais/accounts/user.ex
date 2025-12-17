@@ -10,7 +10,6 @@ defmodule BravoMultipais.Accounts.User do
     field :authenticated_at, :utc_datetime, virtual: true
     field :role, :string, default: "external"
 
-
     timestamps(type: :utc_datetime)
   end
 

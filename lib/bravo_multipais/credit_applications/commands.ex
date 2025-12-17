@@ -2,14 +2,15 @@ defmodule BravoMultipais.CreditApplications.Commands do
   @moduledoc """
   Capa de comandos para manejar el ciclo de vida de las solicitudes de crédito.
 
-  Flujo:
-  - Extrae y normaliza parámetros de entrada (form/API).
-  - Normaliza documento según el país (si viene como string).
-  - O acepta el documento ya normalizado (si viene como mapa).
-  - Resuelve policy por país y valida documento.
-  - Consulta perfil bancario simulado.
-  - Aplica reglas de negocio.
-  - Persiste solicitud y encola job de riesgo en Oban.
+  Flujo típico de `create_application/1`:
+
+    * Extrae y normaliza parámetros de entrada (form/API).
+    * Normaliza el documento según el país (si viene como string).
+    * O acepta el documento ya normalizado (si viene como mapa).
+    * Resuelve la policy por país y valida el documento.
+    * Consulta el perfil bancario simulado (`Bank.fetch_profile/2`).
+    * Aplica reglas de negocio (`Policies.policy_for/1`).
+    * Persiste la solicitud y encola un job de riesgo en Oban.
   """
 
   alias BravoMultipais.{Repo, Bank}
@@ -17,30 +18,40 @@ defmodule BravoMultipais.CreditApplications.Commands do
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Policies
 
+  @typedoc "Parámetros crudos que vienen del formulario LiveView o de la API"
   @type params :: map()
-  @type error_reason :: term()
+
+  @typedoc """
+  Razones de error posibles al crear una aplicación.
+
+  * `:invalid_payload` – falta country o document.
+  * `{:invalid_changeset, Ecto.Changeset.t()}` – errores de validación.
+  * `{:job_enqueue_failed, term()}` – fallo al encolar el job de riesgo.
+  * `{:policy_error, term()}` – error de reglas de negocio / documento.
+  * `{:bank_error, term()}` – fallo al obtener el perfil bancario.
+  * `{:unexpected_error, term()}` – cualquier otro error no contemplado.
+  """
+  @type error_reason ::
+          :invalid_payload
+          | {:invalid_changeset, Ecto.Changeset.t()}
+          | {:job_enqueue_failed, term()}
+          | {:policy_error, term()}
+          | {:bank_error, term()}
+          | {:unexpected_error, term()}
 
   @spec create_application(params) :: {:ok, Application.t()} | {:error, error_reason}
   def create_application(params) when is_map(params) do
-    # Debug opcional:
-    IO.inspect(params, label: "create_application params")
-
-    country        = fetch(params, "country")
-    full_name      = fetch(params, "full_name")
-    amount         = fetch(params, "amount")
+    country = fetch(params, "country")
+    full_name = fetch(params, "full_name")
+    amount = fetch(params, "amount")
     monthly_income = fetch(params, "monthly_income")
 
-    # Ojo: el documento puede venir como:
-    # - "document" => %{"dni" => "...", ...}
-    # - "document_value" => "BNCMRC80A01F205Y"
+    # El documento puede venir como:
+    #   * "document" => %{"dni" => "...", ...}
+    #   * "document_value" => "BNCMRC80A01F205Y"
     raw_document =
       fetch(params, "document") ||
         fetch(params, "document_value")
-
-    # Debug opcional:
-    IO.inspect({country, full_name, raw_document, amount, monthly_income},
-      label: "raw fields in create_application"
-    )
 
     # Si de verdad faltan país o documento → payload inválido
     if is_nil(country) or is_nil(raw_document) do
@@ -69,7 +80,7 @@ defmodule BravoMultipais.CreditApplications.Commands do
             Normalizer.build_document_map(normalized_country, raw_document)
 
           true ->
-            # Cualquier otra cosa rara, intentamos string
+            # Cualquier otra cosa rara, intentamos convertir a string
             Normalizer.build_document_map(normalized_country, to_string(raw_document))
         end
 
@@ -88,9 +99,18 @@ defmodule BravoMultipais.CreditApplications.Commands do
            {:ok, app} <- persist_and_enqueue(attrs, bank_profile, policy) do
         {:ok, app}
       else
+        # Errores "simples"
+        {:error, {:policy_error, reason}} ->
+          {:error, {:policy_error, reason}}
+
+        {:error, {:bank_error, reason}} ->
+          {:error, {:bank_error, reason}}
+
         {:error, reason} ->
+          # Cualquier otro {:error, algo} directo
           {:error, reason}
 
+        # Errores con forma {:error, type, reason}
         {:error, type, reason} ->
           {:error, {type, reason}}
 
@@ -120,30 +140,30 @@ defmodule BravoMultipais.CreditApplications.Commands do
   # =====================
 
   @spec persist_and_enqueue(map(), map(), module()) ::
-        {:ok, Application.t()} | {:error, any()}
-defp persist_and_enqueue(attrs, bank_profile, policy_module) do
-  initial_status = policy_module.next_status_on_creation(attrs, bank_profile)
+          {:ok, Application.t()} | {:error, error_reason}
+  defp persist_and_enqueue(attrs, bank_profile, policy_module) do
+    initial_status = policy_module.next_status_on_creation(attrs, bank_profile)
 
-  changes =
-    attrs
-    |> Map.take([:country, :full_name, :document, :amount, :monthly_income])
-    |> Map.put(:status, initial_status)
-    |> Map.put(:bank_profile, bank_profile)
+    changes =
+      attrs
+      |> Map.take([:country, :full_name, :document, :amount, :monthly_income])
+      |> Map.put(:status, initial_status)
+      |> Map.put(:bank_profile, bank_profile)
 
-  %Application{}
-  |> Application.changeset(changes)
-  |> Repo.insert()
-  |> case do
-    {:ok, app} ->
-      case enqueue_risk_job(app) do
-        :ok -> {:ok, app}
-        {:error, reason} -> {:error, {:job_enqueue_failed, reason}}
-      end
+    %Application{}
+    |> Application.changeset(changes)
+    |> Repo.insert()
+    |> case do
+      {:ok, app} ->
+        case enqueue_risk_job(app) do
+          :ok -> {:ok, app}
+          {:error, reason} -> {:error, {:job_enqueue_failed, reason}}
+        end
 
-    {:error, changeset} ->
-      {:error, {:invalid_changeset, changeset}}
+      {:error, changeset} ->
+        {:error, {:invalid_changeset, changeset}}
+    end
   end
-end
 
   defp enqueue_risk_job(%Application{id: id}) do
     %{application_id: id}

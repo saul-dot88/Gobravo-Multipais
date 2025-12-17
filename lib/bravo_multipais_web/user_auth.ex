@@ -9,8 +9,6 @@ defmodule BravoMultipaisWeb.UserAuth do
   alias BravoMultipais.Accounts.User
   alias BravoMultipaisWeb.Router.Helpers, as: Routes
 
-
-
   # Make the remember me cookie valid for 14 days. This should match
   # the session validity setting in UserToken.
   @max_cookie_age_in_days 14
@@ -70,35 +68,17 @@ defmodule BravoMultipaisWeb.UserAuth do
   """
 
   def fetch_current_scope_for_user(conn, _opts) do
-  token = get_session(conn, :user_token)
+    user =
+      conn
+      |> get_session(:user_token)
+      |> Accounts.get_user_by_session_token()
 
-  {scope, user} =
-    case token && Accounts.get_user_by_session_token(token) do
-      # Nada en DB → no hay sesión
-      nil ->
-        {nil, nil}
+    scope = Scope.for_user(user, user && user.authenticated_at)
 
-      # Caso 1: phx.gen.auth clásico → solo regresa el %User{}
-      %User{} = user ->
-        scope = Scope.for_user(user)
-        {scope, user}
-
-      # Caso 2: tú modificaste el query para regresar {user, algo}
-      {%User{} = user, _meta} ->
-        # Si tu Scope necesita authenticated_at y lo trae en el user:
-        # scope = Scope.for_user(user, user.authenticated_at)
-        scope = Scope.for_user(user)
-        {scope, user}
-
-      # Cualquier otra cosa rara → nos protegemos
-      _other ->
-        {nil, nil}
-    end
-
-  conn
-  |> assign(:current_scope, scope)
-  |> assign(:current_user, user)
-end
+    conn
+    |> assign(:current_user, user)
+    |> assign(:current_scope, scope)
+  end
 
   def fetch_current_user(conn, _opts) do
     {user_token, conn} = ensure_user_token(conn)
@@ -115,7 +95,7 @@ end
       if token = conn.cookies[@remember_me_cookie] do
         {token, conn |> put_token_in_session(token) |> put_session(:user_remember_me, true)}
       else
-        nil
+        {nil, conn}
       end
     end
   end
@@ -277,7 +257,9 @@ end
   def on_mount(:require_sudo_mode, _params, session, socket) do
     socket = mount_current_scope(socket, session)
 
-    if Accounts.sudo_mode?(socket.assigns.current_scope.user, -10) do
+    if socket.assigns.current_scope &&
+         socket.assigns.current_scope.user &&
+         Accounts.sudo_mode?(socket.assigns.current_scope.user, -10) do
       {:cont, socket}
     else
       socket =
@@ -291,16 +273,21 @@ end
 
   defp mount_current_scope(socket, session) do
     Phoenix.Component.assign_new(socket, :current_scope, fn ->
-      {user, _} =
-        if user_token = session["user_token"] do
-          Accounts.get_user_by_session_token(user_token)
-        end || {nil, nil}
+      user =
+        case session["user_token"] do
+          nil ->
+            nil
 
-      Scope.for_user(user)
+          token ->
+            Accounts.get_user_by_session_token(token)
+        end
+
+      # Aquí sí queremos pasar authenticated_at si viene en el user
+      Scope.for_user(user, user && user.authenticated_at)
     end)
   end
 
-    @doc """
+  @doc """
   Plug para restringir acceso a usuarios con rol `backoffice`.
 
   - Si no hay @current_scope (no autenticado), redirige a login.
@@ -308,34 +295,37 @@ end
   - Si todo bien, deja pasar el request.
   """
   def backoffice_auth(conn, _opts) do
-  scope = conn.assigns[:current_scope]
+    scope = conn.assigns[:current_scope]
 
-  cond do
-    # Sin usuario autenticado → lo mandamos a log in
-    is_nil(scope) or is_nil(scope.user) ->
-      conn
-      |> Phoenix.Controller.put_flash(:error, "Debes iniciar sesión para acceder al backoffice.")
-      |> Phoenix.Controller.redirect(to: ~p"/users/log-in")
-      |> Plug.Conn.halt()
+    cond do
+      # Sin usuario autenticado → lo mandamos a log in
+      is_nil(scope) or is_nil(scope.user) ->
+        conn
+        |> Phoenix.Controller.put_flash(
+          :error,
+          "Debes iniciar sesión para acceder al backoffice."
+        )
+        |> Phoenix.Controller.redirect(to: ~p"/users/log-in")
+        |> Plug.Conn.halt()
 
-    # Usuario autenticado pero sin rol backoffice → 403, NO redirigimos a login
-    scope.role != "backoffice" ->
-      conn
-      |> Plug.Conn.put_status(:forbidden)
-      |> Phoenix.Controller.put_view(BravoMultipaisWeb.ErrorHTML)
-      |> Phoenix.Controller.render("403.html")
-      |> Plug.Conn.halt()
+      # Usuario autenticado pero sin rol backoffice → 403, NO redirigimos a login
+      scope.role != "backoffice" ->
+        conn
+        |> Plug.Conn.put_status(:forbidden)
+        |> Phoenix.Controller.put_view(BravoMultipaisWeb.ErrorHTML)
+        |> Phoenix.Controller.render("403.html")
+        |> Plug.Conn.halt()
 
-    # OK: usuario autenticado + rol correcto
-    true ->
-      conn
+      # OK: usuario autenticado + rol correcto
+      true ->
+        conn
+    end
   end
-end
 
   # Si el usuario ya está autenticado, que NO vea el login
   def redirect_if_user_is_authenticated(conn, _opts) do
     current_scope = conn.assigns[:current_scope]
-    current_user  = conn.assigns[:current_user]
+    current_user = conn.assigns[:current_user]
 
     if current_scope || current_user do
       conn
@@ -346,10 +336,10 @@ end
     end
   end
 
-# Para proteger rutas que requieren login
+  # Para proteger rutas que requieren login
   def require_authenticated_user(conn, _opts) do
     current_scope = conn.assigns[:current_scope]
-    current_user  = conn.assigns[:current_user]
+    current_user = conn.assigns[:current_user]
 
     if current_scope || current_user do
       conn
@@ -363,9 +353,9 @@ end
   end
 
   @doc "Returns the path to redirect to after log in."
-  # the user was already logged in, redirect to settings
-  def signed_in_path(%Plug.Conn{assigns: %{current_scope: %Scope{user: %Accounts.User{}}}}) do
-    ~p"/users/settings"
+  def signed_in_path(_conn) do
+    # Siempre mandamos al home del backoffice
+    ~p"/"
   end
 
   def signed_in_path(_), do: ~p"/"
@@ -375,7 +365,7 @@ end
   """
   def require_authenticated_user(conn, _opts) do
     current_scope = conn.assigns[:current_scope]
-    current_user  = conn.assigns[:current_user]
+    current_user = conn.assigns[:current_user]
 
     if current_scope || current_user do
       conn
