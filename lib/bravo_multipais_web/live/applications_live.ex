@@ -1,7 +1,7 @@
 defmodule BravoMultipaisWeb.ApplicationsLive do
   use BravoMultipaisWeb, :live_view
 
-  on_mount {BravoMultipaisWeb.UserAuth, :mount_current_scope}
+  on_mount {BravoMultipaisWeb.UserAuth, :require_backoffice}
 
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
   alias BravoMultipaisWeb.Endpoint

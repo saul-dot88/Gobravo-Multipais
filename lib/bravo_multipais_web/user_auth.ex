@@ -271,18 +271,44 @@ defmodule BravoMultipaisWeb.UserAuth do
     end
   end
 
+  def on_mount(:require_backoffice, _params, session, socket) do
+  socket = mount_current_scope(socket, session)
+
+  case socket.assigns[:current_scope] do
+    %Scope{user: %User{}, role: "backoffice"} ->
+      # Usuario logueado y con rol correcto → dejamos continuar
+      {:cont, socket}
+
+    nil ->
+      # Sin scope → lo tratamos como no autenticado
+      socket =
+        socket
+        |> Phoenix.LiveView.put_flash(:error, "Debes iniciar sesión para acceder al backoffice.")
+        |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
+
+      {:halt, socket}
+
+    %Scope{} ->
+      # Autenticado pero sin rol backoffice
+      socket =
+        socket
+        |> Phoenix.LiveView.put_flash(:error, "No tienes permisos para acceder al backoffice.")
+        |> Phoenix.LiveView.redirect(to: ~p"/")
+
+      {:halt, socket}
+  end
+end
+
   defp mount_current_scope(socket, session) do
     Phoenix.Component.assign_new(socket, :current_scope, fn ->
       user =
-        case session["user_token"] do
-          nil ->
-            nil
-
-          token ->
-            Accounts.get_user_by_session_token(token)
+        if user_token = session["user_token"] do
+          Accounts.get_user_by_session_token(user_token)
+        else
+          nil
         end
 
-      # Aquí sí queremos pasar authenticated_at si viene en el user
+      # usamos el helper Scope.for_user/2 para inyectar authenticated_at si viene
       Scope.for_user(user, user && user.authenticated_at)
     end)
   end

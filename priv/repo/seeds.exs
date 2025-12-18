@@ -1,28 +1,26 @@
 # priv/repo/seeds.exs
 
-alias BravoMultipais.Accounts
+alias BravoMultipais.{Accounts, Repo}
+alias BravoMultipais.Accounts.User
+alias Ecto.Changeset
 
 demo_email = "demo@bravo-multipais.dev"
 
+# Solo necesitamos el email, el resto lo maneja el contexto
 demo_attrs = %{
-  email: demo_email,
-  password: "secret1234",
-  # ajusta este valor para que sea compatible con tu Scope.for_user/1
-  role: "admin"
+  email: demo_email
 }
 
 user =
   case Accounts.get_user_by_email(demo_email) do
     nil ->
-      # Ojo: si en tu contexto no se llama register_user/1,
-      # cámbialo por la función que uses para crear usuarios.
       case Accounts.register_user(demo_attrs) do
         {:ok, user} ->
           IO.puts("Usuario demo creado: #{user.email}")
           user
 
         {:error, changeset} ->
-          IO.inspect(changeset.errors, label: " Error creando usuario demo")
+          IO.inspect(changeset.errors, label: "Error creando usuario demo")
           raise "No se pudo crear el usuario demo"
       end
 
@@ -31,4 +29,10 @@ user =
       user
   end
 
-IO.inspect(user, label: "Usuario demo listo")
+# Aseguramos que el usuario demo tenga rol "backoffice"
+user =
+  user
+  |> Changeset.change(role: "backoffice")
+  |> Repo.update!()
+
+IO.inspect(user, label: "Usuario demo listo (rol backoffice)")
