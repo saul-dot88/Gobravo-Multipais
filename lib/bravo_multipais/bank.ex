@@ -1,94 +1,119 @@
 defmodule BravoMultipais.Bank do
   @moduledoc """
-  Capa simplificada de integración bancaria.
+  Capa de integración con el "proveedor bancario" (simulado).
 
-  Para el MVP, `fetch_profile/2` devuelve un perfil bancario simulado,
-  consistente en estructura, a partir de los datos de la solicitud.
+  Por ahora sólo generamos un perfil mock a partir de los datos
+  de la solicitud.
   """
+
+  alias BravoMultipais.CreditApplications.Application
 
   @type profile :: %{
           country: String.t(),
           external_id: String.t(),
           total_debt: number(),
           avg_balance: number(),
-          currency: String.t(),
-          score: integer()
+          score: integer(),
+          currency: String.t()
         }
 
-  @spec fetch_profile(String.t(), map()) :: {:ok, profile()}
-  def fetch_profile(country, app_attrs) when is_binary(country) and is_map(app_attrs) do
-    {:ok, build_mock_profile(country, app_attrs)}
+  @spec fetch_profile(String.t(), map() | Application.t()) :: {:ok, profile()}
+  def fetch_profile(country, app_or_attrs)
+      when is_binary(country) and is_map(app_or_attrs) do
+    {:ok, build_mock_profile(country, app_or_attrs)}
   end
 
-  # ----------------------
-  # Internals
-  # ----------------------
+  # Versión bang, para el worker EvaluateRisk
+  @spec fetch_profile!(String.t(), map() | Application.t()) :: profile()
+  def fetch_profile!(country, app_or_attrs) do
+    case fetch_profile(country, app_or_attrs) do
+      {:ok, profile} ->
+        profile
 
-  defp build_mock_profile(country, app_attrs) do
-    amount = to_float(app_attrs[:amount] || app_attrs["amount"])
-    income = to_float(app_attrs[:monthly_income] || app_attrs["monthly_income"])
-    doc = app_attrs[:document] || app_attrs["document"] || %{}
-
-    base_currency =
-      case country do
-        "ES" -> "EUR"
-        "IT" -> "EUR"
-        "PT" -> "EUR"
-        _ -> "EUR"
-      end
-
-    # Intento simple de tener algo “realista”
-    total_debt =
-      if income > 0 do
-        min(income * 0.6, amount * 0.8)
-      else
-        0.0
-      end
-
-    avg_balance =
-      if income > 0 do
-        income * 0.4
-      else
-        0.0
-      end
-
-    # Armar external_id a partir del documento si existe
-    raw_doc =
-      doc["dni"] ||
-        doc["codice_fiscale"] ||
-        doc["nif"] ||
-        doc["raw"] ||
-        "GENERIC"
-
-    external_id = "BANK-" <> to_string(raw_doc)
-
-    # Un score base fijo, podrías hacerlo más sofisticado si quieres
-    score = 700
-
-    %{
-      country: country,
-      external_id: external_id,
-      total_debt: total_debt,
-      avg_balance: avg_balance,
-      currency: base_currency,
-      score: score
-    }
-  end
-
-  # Helpers numéricos básicos
-
-  defp to_float(nil), do: 0.0
-
-  defp to_float(%Decimal{} = d), do: Decimal.to_float(d)
-
-  defp to_float(n) when is_integer(n) or is_float(n), do: n * 1.0
-
-  defp to_float(s) when is_binary(s) do
-    case Float.parse(s) do
-      {v, _} -> v
-      :error -> 0.0
+      {:error, reason} ->
+        raise "Error fetching bank profile: #{inspect(reason)}"
     end
   end
 
-  defp to_float(_), do: 0.0
+  # =========================
+  # Helpers internos
+  # =========================
+
+  # Normalizamos attrs para que siempre trabajemos con un map "simple"
+  defp normalize_attrs(%Application{} = app) do
+    %{
+      "country" => app.country,
+      "full_name" => app.full_name,
+      "document" => app.document,
+      "amount" => app.amount,
+      "monthly_income" => app.monthly_income
+    }
+  end
+
+  defp normalize_attrs(attrs) when is_map(attrs), do: attrs
+
+  defp build_mock_profile(country, app_or_attrs) do
+    attrs = normalize_attrs(app_or_attrs)
+
+    amount =
+      attrs
+      |> get_field(["amount"])
+      |> decimal_to_float()
+
+    monthly_income =
+      attrs
+      |> get_field(["monthly_income"])
+      |> decimal_to_float()
+
+    doc = get_field(attrs, ["document"]) || %{}
+
+    raw_doc =
+      doc["dni"] ||
+        doc[:dni] ||
+        doc["codice_fiscale"] ||
+        doc[:codice_fiscale] ||
+        doc["nif"] ||
+        doc[:nif] ||
+        doc["raw"] ||
+        doc[:raw] ||
+        "UNKNOWN"
+
+    %{
+      country: country,
+      external_id: "BANK-#{raw_doc}",
+      total_debt: Float.round(monthly_income * 0.6, 2),
+      avg_balance: Float.round(monthly_income * 0.4, 2),
+      score: 700,
+      currency: "EUR"
+    }
+  end
+
+  # Lee un campo aceptando tanto string como atom
+  defp get_field(map, [key]) do
+    Map.get(map, key) || Map.get(map, to_string(key)) || Map.get(map, String.to_atom("#{key}"))
+  rescue
+    ArgumentError ->
+      Map.get(map, key) || Map.get(map, to_string(key))
+  end
+
+  defp decimal_to_float(%Decimal{} = d), do: Decimal.to_float(d)
+defp decimal_to_float(n) when is_number(n), do: n * 1.0
+defp decimal_to_float(nil), do: 0.0
+
+defp decimal_to_float(n) when is_binary(n) do
+  n
+  |> String.trim()
+  |> case do
+    "" ->
+      0.0
+
+    value ->
+      case Decimal.new(value) do
+        %Decimal{} = d -> Decimal.to_float(d)
+      end
+  end
+rescue
+  _ ->
+    0.0
+end
 end

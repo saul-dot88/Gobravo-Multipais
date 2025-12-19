@@ -219,8 +219,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
           </div>
         <% else %>
           <div class="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-xs text-slate-700">
-            <strong>Vista limitada:</strong>
-            algunas columnas y detalles están ocultos para tu rol.
+            <strong>Vista limitada:</strong> algunas columnas y detalles están ocultos para tu rol.
           </div>
         <% end %>
       <% else %>
@@ -274,8 +273,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 <% end %>
               </select>
             </div>
-
-            <!-- Nombre completo -->
+            
+    <!-- Nombre completo -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
                 Nombre completo
@@ -289,8 +288,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-
-            <!-- Documento -->
+            
+    <!-- Documento -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
                 Documento (DNI / Codice Fiscale / NIF)
@@ -304,8 +303,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-
-            <!-- Monto e ingreso -->
+            
+    <!-- Monto e ingreso -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -351,8 +350,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
           </form>
         </div>
       </div>
-
-      <!-- Panel de lista -->
+      
+    <!-- Panel de lista -->
       <div class="lg:col-span-2">
         <div class="bg-white shadow rounded-2xl p-6">
           <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between mb-4">
@@ -364,8 +363,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
               </p>
             </div>
-
-            <!-- Filtros -->
+            
+    <!-- Filtros -->
             <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -437,35 +436,35 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       <td class="py-2 px-3">
                         {country_badge(app.country)}
                       </td>
-
-                      <!-- Nombre -->
+                      
+    <!-- Nombre -->
                       <td class="py-2 px-3 text-slate-800">
                         {app.full_name}
                       </td>
-
-                      <!-- Monto -->
+                      
+    <!-- Monto -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.amount}
                       </td>
-
-                      <!-- Ingreso mensual -->
+                      
+    <!-- Ingreso mensual -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.monthly_income}
                       </td>
-
-                      <!-- Estado -->
+                      
+    <!-- Estado -->
                       <td class="py-2 px-3 text-center">
                         {status_badge(app.status)}
                       </td>
-
-                      <!-- Score: sólo backoffice ve el chip -->
+                      
+    <!-- Score: sólo backoffice ve el chip -->
                       <%= if backoffice?(@current_scope) do %>
                         <td class="py-2 px-3 text-center">
                           {risk_score_chip(app.risk_score)}
                         </td>
                       <% end %>
-
-                      <!-- Fecha creación -->
+                      
+    <!-- Fecha creación -->
                       <td class="py-2 px-3 text-right text-xs text-slate-500">
                         {Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M")}
                       </td>
@@ -475,8 +474,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </tbody>
             </table>
           </div>
-
-          <!-- Panel de detalle -->
+          
+    <!-- Panel de detalle -->
           <div class="mt-6">
             <%= if @selected_app do %>
               <div class="border border-slate-200 rounded-2xl p-4 bg-slate-50">
@@ -517,8 +516,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       </span>
                     </p>
                   </div>
-
-                  <!-- Columna 2 -->
+                  
+    <!-- Columna 2 -->
                   <div class="space-y-1">
                     <p>
                       <span class="font-medium text-slate-600">Monto:</span>
@@ -541,8 +540,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       <% end %>
                     </p>
                   </div>
-
-                  <!-- Columna 3 -->
+                  
+    <!-- Columna 3 -->
                   <div class="space-y-1">
                     <%= if backoffice?(@current_scope) do %>
                       <%= if @selected_app.bank_profile do %>

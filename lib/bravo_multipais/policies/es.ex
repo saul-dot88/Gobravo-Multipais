@@ -111,22 +111,19 @@ defmodule BravoMultipais.Policies.ES do
   ## Helpers privados
 
   # DNI: 8 dígitos + letra, con chequeo de letra
-  defp valid_dni_letter?(dni) do
-    letters = 'TRWAGMYFPDXBNJZSQVHLCKE'
 
+  defp valid_dni_letter?(dni) when is_binary(dni) and byte_size(dni) == 9 do
+    # Normalizamos a mayúsculas por si viene en minúsculas
+    dni = String.upcase(dni)
     <<number::binary-size(8), letter::binary-size(1)>> = dni
 
-    case Integer.parse(number) do
-      {n, ""} ->
-        expected_letter =
-          letters
-          |> Enum.at(rem(n, 23))
-          |> to_string()
+    with {digits_int, ""} <- Integer.parse(number) do
+      letters = "TRWAGMYFPDXBNJZSQVHLCKE"
+      expected_letter = String.at(letters, rem(digits_int, 23))
 
-        letter == expected_letter
-
-      _ ->
-        false
+      letter == expected_letter
+    else
+      _ -> false
     end
   end
 

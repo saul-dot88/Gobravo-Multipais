@@ -4,13 +4,12 @@ defmodule BravoMultipaisWeb.ApplicationController do
   alias BravoMultipais.CreditApplications
   alias BravoMultipaisWeb.ApiAuth
 
-  # Autorización por acción
   plug :require_backoffice when action in [:index, :show]
   plug :require_creator when action in [:create]
 
   # GET /api/applications
   def index(conn, params) do
-    apps = CreditApplications.list_applications(params)
+    apps = CreditApplications.list_applications_public(params)
     json(conn, %{data: apps})
   end
 
@@ -22,38 +21,46 @@ defmodule BravoMultipaisWeb.ApplicationController do
         |> put_status(:not_found)
         |> json(%{error: "not_found", resource: "application", id: id})
 
-      app ->
-        json(conn, %{data: app})
+      app_public ->
+        json(conn, %{data: app_public})
     end
   end
 
+  # POST /api/applications
   def create(conn, params) do
-    params =
-      params
-      |> normalize_document()
+    params = normalize_document(params)
 
     case CreditApplications.create_application(params) do
       {:ok, app} ->
         conn
         |> put_status(:created)
-        |> json(app_to_public(app))
+        |> json(CreditApplications.to_public(app))
 
       {:error, {:policy_error, reason}} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "policy_error", reason: inspect(reason)})
 
-      {:error, %Ecto.Changeset{} = changeset} ->
+      {:error, {:invalid_changeset, %Ecto.Changeset{} = changeset}} ->
         conn
         |> put_status(:unprocessable_entity)
         |> json(%{error: "validation_error", details: changeset_errors(changeset)})
+
+      {:error, :invalid_payload} ->
+        conn
+        |> put_status(:bad_request)
+        |> json(%{error: "invalid_payload"})
+
+      {:error, other} ->
+        conn
+        |> put_status(:internal_server_error)
+        |> json(%{error: "unexpected_error", reason: inspect(other)})
     end
   end
 
-  defp normalize_document(%{"document" => %{} = _doc} = params) do
-    # Ya viene bien formado, lo usamos tal cual
-    params
-  end
+  # --- normalización de documento ---
+
+  defp normalize_document(%{"document" => %{} = _doc} = params), do: params
 
   defp normalize_document(%{"country" => country, "document_value" => value} = params) do
     document =
@@ -73,18 +80,13 @@ defmodule BravoMultipaisWeb.ApplicationController do
 
   # --- plugs privados ---
 
-  defp require_backoffice(conn, _opts) do
-    ApiAuth.require_backoffice(conn)
-  end
+  defp require_backoffice(conn, _opts), do: ApiAuth.require_backoffice(conn)
 
   defp require_creator(conn, _opts) do
-    # Ejemplo: dejar que backoffice Y external creen
     ApiAuth.require_role(conn, ["backoffice", "external"])
   end
 
-  defp app_to_public(app) do
-    CreditApplications.to_public(app)
-  end
+  # --- helpers de error ---
 
   defp changeset_errors(%Ecto.Changeset{} = changeset) do
     Ecto.Changeset.traverse_errors(changeset, fn {msg, opts} ->

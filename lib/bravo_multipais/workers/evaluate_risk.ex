@@ -14,6 +14,9 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   alias BravoMultipais.Policies
   alias BravoMultipais.Bank
   alias BravoMultipaisWeb.Endpoint
+   alias BravoMultipais.Workers.WebhookNotifier
+
+  require Logger
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"application_id" => id}}) do

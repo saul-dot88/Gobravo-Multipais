@@ -16,6 +16,14 @@ config :bravo_multipais, BravoMultipais.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
+config :bravo_multipais, Oban,
+  repo: BravoMultipais.Repo,
+  # no arrancamos colas reales en test
+  queues: false,
+  # no levantamos plugins (incluye el Peer)
+  plugins: false,
+  testing: :inline
+
 # We don't run a server during test. If one is required,
 # you can enable the server option below.
 config :bravo_multipais, BravoMultipaisWeb.Endpoint,
