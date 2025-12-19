@@ -26,26 +26,26 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
   end
 
   test "perform/1 actualiza risk_score, status y bank_profile" do
-  app = insert_pending_application()
-  job = %Job{args: %{"application_id" => app.id}}
+    app = insert_pending_application()
+    job = %Job{args: %{"application_id" => app.id}}
 
-  assert :ok = EvaluateRisk.perform(job)
+    assert :ok = EvaluateRisk.perform(job)
 
-  updated = Repo.get!(Application, app.id)
+    updated = Repo.get!(Application, app.id)
 
-  # risk_score se calculó
-  assert is_integer(updated.risk_score)
-  assert updated.risk_score > 0
+    # risk_score se calculó
+    assert is_integer(updated.risk_score)
+    assert updated.risk_score > 0
 
-  # bank_profile se generó y tiene info coherente
-  assert is_map(updated.bank_profile)
-  assert is_integer(updated.bank_profile["score"])
-  assert updated.bank_profile["score"] > 0
+    # bank_profile se generó y tiene info coherente
+    assert is_map(updated.bank_profile)
+    assert is_integer(updated.bank_profile["score"])
+    assert updated.bank_profile["score"] > 0
 
-  # el status salió de PENDING_RISK a algún estado “final”
-  refute updated.status == "PENDING_RISK"
-  assert updated.status in ["APPROVED", "REJECTED", "UNDER_REVIEW"]
-end
+    # el status salió de PENDING_RISK a algún estado “final”
+    refute updated.status == "PENDING_RISK"
+    assert updated.status in ["APPROVED", "REJECTED", "UNDER_REVIEW"]
+  end
 
   test "perform/1 publica un evento en el tópico \"applications\"" do
     app = insert_pending_application()

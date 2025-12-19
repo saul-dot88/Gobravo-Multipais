@@ -97,23 +97,23 @@ defmodule BravoMultipais.Bank do
   end
 
   defp decimal_to_float(%Decimal{} = d), do: Decimal.to_float(d)
-defp decimal_to_float(n) when is_number(n), do: n * 1.0
-defp decimal_to_float(nil), do: 0.0
+  defp decimal_to_float(n) when is_number(n), do: n * 1.0
+  defp decimal_to_float(nil), do: 0.0
 
-defp decimal_to_float(n) when is_binary(n) do
-  n
-  |> String.trim()
-  |> case do
-    "" ->
+  defp decimal_to_float(n) when is_binary(n) do
+    n
+    |> String.trim()
+    |> case do
+      "" ->
+        0.0
+
+      value ->
+        case Decimal.new(value) do
+          %Decimal{} = d -> Decimal.to_float(d)
+        end
+    end
+  rescue
+    _ ->
       0.0
-
-    value ->
-      case Decimal.new(value) do
-        %Decimal{} = d -> Decimal.to_float(d)
-      end
   end
-rescue
-  _ ->
-    0.0
-end
 end

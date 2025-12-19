@@ -34,7 +34,7 @@ defmodule BravoMultipaisWeb.ApplicationController do
       {:ok, app} ->
         conn
         |> put_status(:created)
-        |> json(CreditApplications.to_public(app))
+        |> json(%{data: CreditApplications.to_public(app)})
 
       {:error, {:policy_error, reason}} ->
         conn

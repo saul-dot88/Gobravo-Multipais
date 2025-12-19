@@ -14,7 +14,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   alias BravoMultipais.Policies
   alias BravoMultipais.Bank
   alias BravoMultipaisWeb.Endpoint
-   alias BravoMultipais.Workers.WebhookNotifier
+  alias BravoMultipais.Workers.WebhookNotifier
 
   require Logger
 

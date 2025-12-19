@@ -1,125 +1,175 @@
 defmodule BravoMultipais.CreditApplications do
   @moduledoc """
-  Contexto de alto nivel para trabajar con solicitudes de crédito.
+  Contexto público para el módulo de solicitudes de crédito.
 
-  Expone funciones “limpias” para el resto de la app (LiveViews, APIs),
-  delegando la lógica a:
+  Expone una API estable para controladores, LiveViews y cualquier otra capa
+  externa, delegando la lógica real a:
 
-    * `BravoMultipais.CreditApplications.Queries` – lecturas/queries.
-    * `BravoMultipais.CreditApplications.Commands` – comandos/escritura.
+    * `BravoMultipais.CreditApplications.Commands`
+    * `BravoMultipais.CreditApplications.Queries`
+
+  Además define una proyección pública (`to_public/1`) para exponer
+  las solicitudes hacia APIs externas.
   """
 
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
 
-  @type filter :: map()
-  @type params :: map()
-  @type id :: Ecto.UUID.t() | String.t()
+  @type application :: Application.t()
+  @type filters :: %{optional(:country) => String.t(), optional(:status) => String.t()}
 
-  # ==========
-  # Lecturas
-  # ==========
+  # ─────────────────────────────────────────────────────────────
+  # Lecturas / queries
+  # ─────────────────────────────────────────────────────────────
 
   @doc """
-  Lista solicitudes de crédito según el filtro dado (modelo interno).
+  Lista solicitudes aplicando filtros opcionales.
+
+  Acepta tanto mapas con keys string (params de Plug/conn) como
+  mapas con keys atom (`:country`, `:status`).
   """
-  @spec list_applications(filter) :: [Application.t()]
-  def list_applications(filter \\ %{}) do
-    Queries.list_applications(filter)
+  @spec list_applications(map()) :: [application]
+  def list_applications(params \\ %{}) do
+    filters =
+      %{}
+      |> maybe_put_filter(params, :country)
+      |> maybe_put_filter(params, :status)
+
+    Queries.list_applications(filters)
   end
 
   @doc """
-  Lista solicitudes en formato público (DTO para API).
+  Versión pública de `list_applications/1`, ya proyectada a JSON-safe.
+
+  Devuelve una lista de maps tal como se exponen en la API.
   """
-  @spec list_applications_public(filter) :: [map()]
-  def list_applications_public(filter \\ %{}) do
-    filter
-    |> list_applications()
-    |> Enum.map(&to_public/1)
+  @spec list_applications_public(map()) :: [map()]
+  def list_applications_public(params \\ %{}) do
+    Queries.list_applications(params)
   end
 
   @doc """
-  Obtiene una aplicación por ID (modelo interno).
+  Obtiene una aplicación por id, o `nil` si no existe.
   """
-  @spec get_application(id) :: Application.t() | nil
-  def get_application(id) do
-    Queries.get_application(id)
-  end
+  @spec get_application(Ecto.UUID.t()) :: application | nil
+  def get_application(id), do: Queries.get_application(id)
 
   @doc """
-  Obtiene una aplicación por ID, lanzando si no existe.
+  Igual que `get_application/1` pero lanza si no existe.
   """
-  @spec get_application!(id) :: Application.t()
-  def get_application!(id) do
-    case get_application(id) do
-      nil -> raise Ecto.NoResultsError, queryable: Application
-      app -> app
-    end
-  end
+  @spec get_application!(Ecto.UUID.t()) :: application
+  def get_application!(id), do: Queries.get_application!(id)
 
   @doc """
-  Obtiene una aplicación por ID y la proyecta al formato público.
+  Devuelve una versión “pública” de la aplicación, lista para exponer en APIs.
 
-  Devuelve `nil` si no existe.
+  Si no existe la aplicación, devuelve `nil`.
   """
-  @spec get_application_public(id) :: map() | nil
+  @spec get_application_public(Ecto.UUID.t()) :: map() | nil
   def get_application_public(id) do
-    case get_application(id) do
-      nil -> nil
+    case Queries.get_application(id) do
       %Application{} = app -> to_public(app)
+      nil -> nil
     end
   end
 
-  # ==========
-  # Comandos
-  # ==========
+  # ─────────────────────────────────────────────────────────────
+  # Comandos / escritura
+  # ─────────────────────────────────────────────────────────────
 
   @doc """
-  Crea una solicitud de crédito, normalizando parámetros y
-  ejecutando todas las reglas de negocio.
+  Crea una solicitud de crédito a través del módulo de comandos.
 
-  Internamente delega en `Commands.create_application/1`.
+  Delegamos a `Commands.create_application/1` sin cambiar el contrato, de forma
+  que los controladores puedan pattern-matchear:
+
+    * `{:ok, %Application{}}`
+    * `{:error, {:policy_error, reason}}`
+    * `{:error, {:invalid_changeset, %Ecto.Changeset{}}}`
+    * `{:error, reason}` (otros errores de dominio)
   """
-  @spec create_application(params) :: {:ok, Application.t()} | {:error, term()}
-  def create_application(params) when is_map(params) do
-    Commands.create_application(params)
+  @spec create_application(map()) ::
+          {:ok, application}
+          | {:error, {:policy_error, term()}}
+          | {:error, {:invalid_changeset, Ecto.Changeset.t()}}
+          | {:error, term()}
+  def create_application(params) do
+    case Commands.create_application(params) do
+      {:ok, app} ->
+        {:ok, app}
+
+      # ya viene marcado como policy_error
+      {:error, {:policy_error, _} = e} ->
+        {:error, e}
+
+      # errores de negocio “crudos” del dominio
+      {:error, :income_too_low} ->
+        {:error, {:policy_error, :income_too_low}}
+
+      # cambioset inválido desde Commands.persist_and_enqueue/3
+      {:error, {:invalid_changeset, %Ecto.Changeset{} = changeset}} ->
+        {:error, {:invalid_changeset, changeset}}
+
+      # cualquier otra cosa, la dejamos pasar tal cual
+      {:error, other} ->
+        {:error, other}
+    end
   end
 
-  def create_application(_), do: {:error, :invalid_payload}
+  @doc """
+  Devuelve un changeset para formularios LiveView (opcional).
 
-  # ==========
+  No lo estamos usando aún en tu LiveView actual, pero es estándar de contexto.
+  """
+  @spec change_application(Application.t() | %Application{}, map()) :: Ecto.Changeset.t()
+  def change_application(app \\ %Application{}, attrs \\ %{}) do
+    Application.changeset(app, attrs)
+  end
+
+  # ─────────────────────────────────────────────────────────────
   # Proyección pública
-  # ==========
+  # ─────────────────────────────────────────────────────────────
 
   @doc """
-  Proyección “pública” de una `Application`.
+  Proyección “segura” para exponer una solicitud en JSON.
 
-  Aquí decides qué campos exponer (evita filtrar bank_profile completo si no quieres
-  sacar info sensible).
+  Ojo: aquí puedes decidir qué campos NO quieres exponer hacia fuera
+  (por ej. `bank_profile` completo).
   """
   @spec to_public(Application.t()) :: map()
   def to_public(%Application{} = app) do
-    base =
-      %{
-        id: app.id,
-        country: app.country,
-        full_name: app.full_name,
-        status: app.status,
-        risk_score: app.risk_score,
-        amount: app.amount,
-        monthly_income: app.monthly_income,
-        inserted_at: app.inserted_at
-      }
+    %{
+      id: app.id,
+      country: app.country,
+      full_name: app.full_name,
+      document: app.document,
+      amount: app.amount,
+      monthly_income: app.monthly_income,
+      status: app.status,
+      risk_score: app.risk_score,
+      external_reference: app.external_reference,
+      inserted_at: app.inserted_at,
+      updated_at: app.updated_at
+      # Si en un futuro quieres exponer parte de bank_profile,
+      # aquí podrías hacer algo como:
+      # bank_profile: Map.take(app.bank_profile || %{}, ["score", "total_debt"])
+    }
+  end
 
-    # Si quieres exponer algo del perfil bancario, hazlo “sanitizado”:
-    bank_profile =
-      case app.bank_profile do
-        nil ->
-          nil
+  # ─────────────────────────────────────────────────────────────
+  # Helpers internos
+  # ─────────────────────────────────────────────────────────────
 
-        profile when is_map(profile) ->
-          Map.take(profile, ["external_id", "total_debt", "avg_balance", "currency"])
-      end
+  # Lee country/status indistintamente como "country" / :country, y
+  # ignora valores vacíos.
+  defp maybe_put_filter(acc, params, key) do
+    val =
+      Map.get(params, key) ||
+        Map.get(params, Atom.to_string(key))
 
-    Map.put(base, :bank_profile, bank_profile)
+    case val do
+      nil -> acc
+      "" -> acc
+      v -> Map.put(acc, key, v)
+    end
   end
 end
