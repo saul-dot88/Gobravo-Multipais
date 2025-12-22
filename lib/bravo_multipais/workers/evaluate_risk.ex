@@ -1,101 +1,128 @@
 defmodule BravoMultipais.Workers.EvaluateRisk do
-  @moduledoc """
-  Worker de Oban que toma una solicitud de crédito,
-  ejecuta la lógica de scoring y actualiza su estado final.
-  """
-
   use Oban.Worker,
     queue: :risk,
-    max_attempts: 5,
-    unique: [fields: [:args, :queue], period: 60]
+    max_attempts: 3
 
   alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
-  alias BravoMultipais.Policies
-  alias BravoMultipais.Bank
   alias BravoMultipaisWeb.Endpoint
-  alias BravoMultipais.Workers.WebhookNotifier
 
-  require Logger
+  @topic "applications"
+
+  @doc """
+  Encola una evaluación de riesgo para la aplicación dada.
+
+  Retorna:
+    * :ok
+    * {:error, reason}
+  """
+  def enqueue(application_id) when is_binary(application_id) do
+    %{"application_id" => application_id}
+    |> __MODULE__.new()
+    |> Oban.insert()
+    |> case do
+      {:ok, _job} -> :ok
+      {:error, reason} -> {:error, reason}
+    end
+  end
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"application_id" => id}}) do
-    app = Repo.get!(Application, id)
-
-    policy = Policies.policy_for(app.country)
-    bank_profile = Bank.fetch_profile!(app.country, app)
-
-    %{score: score, final_status: final_status} =
-      policy.assess_risk(app, bank_profile)
-
-    {:ok, app} =
-      app
-      |> Application.changeset(%{
-        risk_score: score,
-        status: final_status,
-        bank_profile: bank_profile
-      })
-      |> Repo.update()
-
-    Logger.info("Risk evaluation completed",
-      application_id: app.id,
-      status: app.status,
-      risk_score: app.risk_score
-    )
-
-    # 1) Notificar al frontend (ya lo tenías):
-    Phoenix.PubSub.broadcast(
-      BravoMultipais.PubSub,
-      "applications",
-      %Phoenix.Socket.Broadcast{
-        topic: "applications",
-        event: "updated",
-        payload: %{id: app.id}
-      }
-    )
-
-    # 2) Encolar webhook externo
-    :ok = WebhookNotifier.enqueue(app.id)
-
-    :ok
-  end
-
-  def perform(%Oban.Job{args: args}) do
-    # Cualquier payload raro lo descartamos explícitamente
-    {:discard, {:invalid_args, args}}
-  end
-
-  # ======================
-  # Lógica interna
-  # ======================
-
-  defp do_evaluate(%Application{} = app) do
-    # Usamos el perfil bancario guardado en la creación.
-    bank_profile = app.bank_profile || %{}
-
-    policy = Policies.policy_for(app.country)
-
-    # Calculamos score y estado final
-    %{score: score, final_status: final_status} =
-      policy.assess_risk(app, bank_profile)
-
-    # Actualizamos la solicitud
-    changeset =
-      app
-      |> Application.changeset(%{
-        status: final_status,
-        risk_score: score,
-        bank_profile: bank_profile
-      })
-
-    case Repo.update(changeset) do
-      {:ok, updated} ->
-        # Avisamos al LiveView (si está suscrito) para refrescar la tabla en tiempo real
-        Endpoint.broadcast("applications", "updated", %{id: updated.id})
+    case Repo.get(Application, id) do
+      nil ->
+        # Nada que hacer; puedes registrar log si quieres
         :ok
 
-      {:error, changeset} ->
-        {:error, {:update_failed, changeset}}
+      %Application{} = app ->
+        {risk_score, status, bank_profile} = evaluate(app)
+
+        changeset =
+          Application.changeset(app, %{
+            risk_score: risk_score,
+            status: status,
+            bank_profile: bank_profile
+          })
+
+        case Repo.update(changeset) do
+          {:ok, updated_app} ->
+            # Notificamos al LiveView para auto-refresh
+            Endpoint.broadcast(@topic, "status_changed", %{
+              id: updated_app.id,
+              status: updated_app.status,
+              risk_score: updated_app.risk_score
+            })
+
+            IO.puts("Risk evaluation completed for #{updated_app.id}")
+            :ok
+
+          {:error, changeset} ->
+            # Oban marcará el job como error, reintento si aplica
+            {:error, changeset}
+        end
     end
   end
+
+  # ─────────────────────────────
+  # Lógica "fake" de evaluación
+  # ─────────────────────────────
+
+  defp evaluate(app) do
+    ratio =
+      with %Decimal{} = amount <- app.amount,
+           %Decimal{} = income <- app.monthly_income,
+           true <- Decimal.cmp(income, 0) == :gt do
+        Decimal.div(amount, income)
+      else
+        _ -> Decimal.new("99")
+      end
+
+    base_score =
+      cond do
+        Decimal.cmp(ratio, Decimal.new("0.5")) == :lt -> 780
+        Decimal.cmp(ratio, Decimal.new("1.0")) == :lt -> 720
+        Decimal.cmp(ratio, Decimal.new("1.5")) == :lt -> 660
+        true -> 620
+      end
+
+    status =
+      if base_score >= 660 do
+        "APPROVED"
+      else
+        "REJECTED"
+      end
+
+    bank_profile = build_fake_bank_profile(app, base_score)
+
+    {base_score, status, bank_profile}
+  end
+
+  defp build_fake_bank_profile(app, score) do
+  amount = app.amount || Decimal.new(0)
+  income = app.monthly_income || Decimal.new(0)
+
+  total_debt =
+    amount
+    |> Decimal.mult(Decimal.new("0.8"))
+    |> Decimal.to_float()
+
+  avg_balance =
+    income
+    |> Decimal.mult(Decimal.new("3.5"))
+    |> Decimal.to_float()
+
+  %{
+    country: app.country,
+    currency: "EUR",
+    score: score,
+    total_debt: total_debt,
+    avg_balance: avg_balance,
+    external_id: "BANK-#{mask_doc(app.document)}"
+  }
+  end
+
+  defp mask_doc(%{"dni" => dni}) when is_binary(dni), do: dni
+  defp mask_doc(%{"codice_fiscale" => cf}) when is_binary(cf), do: cf
+  defp mask_doc(%{"nif" => nif}) when is_binary(nif), do: nif
+  defp mask_doc(%{"raw" => raw}) when is_binary(raw), do: raw
+  defp mask_doc(_), do: "UNKNOWN"
 end

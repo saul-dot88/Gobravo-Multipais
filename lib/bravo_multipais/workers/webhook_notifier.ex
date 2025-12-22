@@ -11,16 +11,19 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
   alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
+    alias BravoMultipaisWeb.Endpoint
+
 
   require Logger
+
+  @topic "applications"
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"application_id" => application_id}}) do
     app = Repo.get!(Application, application_id)
 
-    # En tests NO mandamos el webhook para evitar dependencias externas
-    if Mix.env() == :test do
-      Logger.debug("Skipping webhook in test env",
+    if skip_webhooks?() do
+      Logger.debug("Skipping webhook (config skip_webhooks=true)",
         application_id: app.id,
         status: app.status,
         risk_score: app.risk_score
@@ -32,6 +35,10 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
     end
   end
 
+  defp skip_webhooks? do
+    Elixir.Application.get_env(:bravo_multipais, :skip_webhooks, false)
+  end
+
   @doc """
   Helper para encolar el job del webhook desde cualquier parte del dominio.
 
@@ -40,7 +47,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
       WebhookNotifier.enqueue(app.id)
   """
   @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
-  def enqueue(application_id) do
+  def enqueue(application_id) when is_binary(application_id) do
     %{"application_id" => application_id}
     |> __MODULE__.new()
     |> Oban.insert()
@@ -75,25 +82,37 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
       url: url
     )
 
-    case Finch.build(:post, url, headers, body)
-         |> Finch.request(BravoMultipais.Finch) do
-      {:ok, %{status: status} = resp} when status in 200..299 ->
-        Logger.info("Webhook enviado correctamente",
-          application_id: app.id,
-          status: app.status,
-          http_status: status
-        )
+    with {:ok, resp} <-
+           Finch.build(:post, url, headers, body)
+           |> Finch.request(BravoMultipais.Finch) do
+      case resp.status do
+        status when status in 200..299 ->
+          Logger.info("Webhook enviado correctamente",
+            application_id: app.id,
+            status: app.status,
+            http_status: status
+          )
 
-        :ok
+          # refrescar UI igual que EvaluateRisk
+          Endpoint.broadcast(@topic, "status_changed", %{
+            id: app.id,
+            status: app.status,
+            risk_score: app.risk_score,
+            at: DateTime.utc_now()
+          })
 
-      {:ok, resp} ->
-        Logger.error("Webhook respondió con error",
-          application_id: app.id,
-          response: inspect(resp)
-        )
+          :ok
 
-        :error
+        status ->
+          Logger.error("Webhook respondió con error",
+            application_id: app.id,
+            http_status: status,
+            response: inspect(resp)
+          )
 
+          {:error, {:http_error, status}}
+      end
+    else
       {:error, reason} ->
         Logger.error("Error HTTP enviando webhook",
           application_id: app.id,

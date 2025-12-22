@@ -16,6 +16,8 @@ config :bravo_multipais, BravoMultipais.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   pool_size: System.schedulers_online() * 2
 
+config :bravo_multipais, :skip_webhooks, true
+
 config :bravo_multipais, Oban,
   repo: BravoMultipais.Repo,
   # no arrancamos colas reales en test
