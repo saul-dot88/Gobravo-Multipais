@@ -23,6 +23,15 @@ defmodule BravoMultipaisWeb.Router do
     plug :backoffice_auth
   end
 
+  pipeline :api_public do
+    plug :accepts, ["json"]
+  end
+
+  pipeline :api_protected do
+    plug :accepts, ["json"]
+    plug BravoMultipaisWeb.ApiAuth
+  end
+
   pipeline :api do
     plug :accepts, ["json"]
     plug BravoMultipaisWeb.ApiAuth
@@ -36,10 +45,16 @@ defmodule BravoMultipaisWeb.Router do
     live "/", ApplicationsLive, :index
   end
 
+  scope "/api", BravoMultipaisWeb do
+    pipe_through :api_public
+
+    get "/health", HealthController, :index
+  end
+
   ## API pública
 
   scope "/api", BravoMultipaisWeb do
-    pipe_through :api
+    pipe_through :api_protected
 
     post "/applications", ApplicationController, :create
     get "/applications/:id", ApplicationController, :show

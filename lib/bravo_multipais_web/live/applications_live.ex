@@ -3,28 +3,46 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
 
   on_mount {BravoMultipaisWeb.UserAuth, :require_backoffice}
 
+  alias BravoMultipais.CreditApplications
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
   alias BravoMultipaisWeb.Endpoint
+  alias BravoMultipais.Workers.{EvaluateRisk, WebhookNotifier}
 
   @impl true
   def mount(_params, _session, socket) do
-    if connected?(socket) do
-      Endpoint.subscribe("applications")
-    end
+    scope = socket.assigns.current_scope
 
-    applications = Queries.list_applications(%{})
+    filters = %{}
+    apps = CreditApplications.list_applications(filters)
 
     {:ok,
      socket
-     |> assign(:applications, applications)
-     |> assign(:countries, ["ES", "IT", "PT"])
-     |> assign(:statuses, ["CREATED", "PENDING_RISK", "UNDER_REVIEW", "APPROVED", "REJECTED"])
-     |> assign(:filter_country, "")
-     |> assign(:filter_status, "")
-     |> assign(:form, empty_form())
-     |> assign(:selected_app, nil)
-     |> assign(:error_message, nil)
-     |> assign(:success_message, nil)}
+     |> assign(
+       applications: apps,
+       stats: build_stats(apps),
+       form: %{
+         "country" => "ES",
+         "full_name" => "",
+         "document_value" => "",
+         "amount" => "",
+         "monthly_income" => ""
+       },
+       current_scope: scope,
+       countries: ["ES", "IT", "PT"],
+       statuses: ["CREATED", "PENDING_RISK", "UNDER_REVIEW", "APPROVED", "REJECTED"],
+       filter_country: nil,
+       filter_status: nil,
+       min_amount: nil,
+       max_amount: nil,
+       from_date: nil,
+       to_date: nil,
+       only_evaluated: false,
+       selected_application_id: nil,
+       selected_app: nil,
+       show_raw_json: false,
+       error_message: nil,
+       success_message: nil
+     )}
   end
 
   @impl true
@@ -42,12 +60,16 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
          |> assign(:form, empty_form())
          |> assign(:error_message, nil)
          |> assign(:success_message, "Solicitud creada correctamente.")}
+                 |> schedule_clear_messages()
+
 
       {:error, {:policy_error, reason}} ->
         {:noreply,
          socket
          |> put_flash(:error, "Business rule failed: #{inspect(reason)}")
          |> assign(:error_message, "Regla de negocio falló: #{inspect(reason)}")}
+                 |> schedule_clear_messages()
+
 
       {:error, {:invalid_changeset, changeset}} ->
         {:noreply,
@@ -55,42 +77,78 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
          |> put_flash(:error, "Payload inválido para crear la solicitud.")
          |> assign(:error_message, "Errores de validación en la solicitud.")
          |> assign(:changeset, changeset)}
+         |> schedule_clear_messages()
+
 
       {:error, :invalid_payload} ->
         {:noreply,
          socket
          |> put_flash(:error, "Payload inválido: falta país o documento.")
          |> assign(:error_message, "Faltan datos obligatorios (país/documento).")}
+         |> schedule_clear_messages()
 
       {:error, {:job_enqueue_failed, reason}} ->
         {:noreply,
          socket
          |> put_flash(:error, "La solicitud se guardó, pero falló el job de riesgo.")
          |> assign(:error_message, "Job de riesgo no pudo encolarse: #{inspect(reason)}")}
+         |> schedule_clear_messages()
 
       {:error, other} ->
         {:noreply,
          socket
          |> put_flash(:error, "Ocurrió un error inesperado al crear la solicitud.")
          |> assign(:error_message, "Error inesperado: #{inspect(other)}")}
+         |> schedule_clear_messages()
     end
   end
 
   @impl true
-  def handle_event("filter", %{"country" => country, "status" => status}, socket) do
-    filter =
-      %{}
-      |> maybe_put("country", country)
-      |> maybe_put("status", status)
+  def handle_event("filter", params, socket) do
+    country = blank_to_nil(params["country"])
+    status = blank_to_nil(params["status"])
 
-    applications = Queries.list_applications(filter)
+    # si aún no tienes estos helpers, puedes dejarlos en nil por ahora
+    min_amount = blank_to_nil(params["min_amount"])
+    max_amount = blank_to_nil(params["max_amount"])
+    from_date = blank_to_nil(params["from_date"])
+    to_date = blank_to_nil(params["to_date"])
+
+    # checkbox: en HTML sólo viene cuando está marcado
+    only_evaluated = Map.has_key?(params, "only_evaluated")
+
+    filters = %{
+      country: country,
+      status: status,
+      min_amount: min_amount,
+      max_amount: max_amount,
+      from_date: from_date,
+      to_date: to_date,
+      only_evaluated: only_evaluated
+    }
+
+    apps = CreditApplications.list_applications(filters)
 
     {:noreply,
      socket
-     |> assign(:applications, applications)
-     |> assign(:filter_country, country)
-     |> assign(:filter_status, status)}
+     |> assign(
+       applications: apps,
+       stats: build_stats(apps),
+       filter_country: country,
+       filter_status: status,
+       min_amount: min_amount,
+       max_amount: max_amount,
+       from_date: from_date,
+       to_date: to_date,
+       only_evaluated: only_evaluated,
+       selected_application_id: nil,
+       selected_app: nil
+     )}
   end
+
+  defp blank_to_nil(""), do: nil
+  defp blank_to_nil(nil), do: nil
+  defp blank_to_nil(value), do: value
 
   @impl true
   def handle_event("select_app", %{"id" => id}, socket) do
@@ -99,6 +157,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
         {:noreply,
          socket
          |> assign(:selected_app, nil)
+         |> assign(:show_raw_json, false)
          |> assign(:error_message, "La solicitud seleccionada ya no existe.")}
 
       app ->
@@ -110,50 +169,23 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   end
 
   @impl true
-  def handle_event("clear_selection", _params, socket) do
-    {:noreply, assign(socket, :selected_app, nil)}
+  def handle_event("select_application", %{"id" => id}, socket) do
+    {:noreply, assign(socket, :selected_application_id, id)}
   end
 
   @impl true
-  def handle_info(%{event: "status_changed", payload: payload}, socket) do
-    apps =
-      Enum.map(socket.assigns.applications, fn app ->
-        if app.id == payload.id do
-          %{app | status: payload.status, risk_score: payload.risk_score}
-        else
-          app
-        end
-      end)
-
-    selected_app =
-      case socket.assigns.selected_app do
-        %{} = sel when sel.id == payload.id ->
-          %{sel | status: payload.status, risk_score: payload.risk_score}
-
-        other ->
-          other
-      end
-
+  def handle_event("clear_selection", _params, socket) do
     {:noreply,
      socket
-     |> assign(:applications, apps)
-     |> assign(:selected_app, selected_app)}
+     |> assign(:selected_app, nil)
+     |> assign(:show_raw_json, false)}
   end
 
-  @impl true
-  def handle_info(
-        %Phoenix.Socket.Broadcast{
-          topic: "applications",
-          event: "updated",
-          payload: %{id: id}
-        },
-        socket
-      ) do
-    applications =
-      Queries.list_applications(%{
-        country: socket.assigns.filter_country,
-        status: socket.assigns.filter_status
-      })
+  def handle_event("toggle_raw_json", _params, socket) do
+    {:noreply, update(socket, :show_raw_json, fn current -> !current end)}
+  end
+
+
 
     selected_app =
       case socket.assigns.selected_app do
@@ -231,9 +263,46 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     """
   end
 
-  # Panel principal (form + tabla + detalle)
   defp applications_panel(assigns) do
+    assigns =
+      assigns
+      |> assign_new(:applications, fn -> [] end)
+      |> assign_new(:countries, fn -> ["ES", "IT", "PT"] end)
+      |> assign_new(:statuses, fn ->
+        ["CREATED", "PENDING_RISK", "UNDER_REVIEW", "APPROVED", "REJECTED"]
+      end)
+      |> assign_new(:form, fn ->
+        %{
+          "country" => "ES",
+          "full_name" => "",
+          "document_value" => "",
+          "amount" => "",
+          "monthly_income" => ""
+        }
+      end)
+      |> assign_new(:current_scope, fn -> nil end)
+      |> assign_new(:filter_country, fn -> nil end)
+      |> assign_new(:filter_status, fn -> nil end)
+      |> assign_new(:filter_min_amount, fn -> nil end)
+      |> assign_new(:filter_max_amount, fn -> nil end)
+      |> assign_new(:filter_from_date, fn -> nil end)
+      |> assign_new(:filter_to_date, fn -> nil end)
+      |> assign_new(:only_evaluated, fn -> false end)
+      |> assign_new(:selected_app, fn -> nil end)
+      |> assign_new(:show_raw_json, fn -> false end)
+      |> assign_new(:error_message, fn -> nil end)
+      |> assign_new(:success_message, fn -> nil end)
+
+    assigns = assign(assigns, :stats, build_stats(assigns.applications || []))
+
     ~H"""
+    <div class="mb-6 grid gap-4 sm:grid-cols-3">
+      <.stat_card label="Total solicitudes" value={@stats.total} />
+      <.stat_card label="Pendientes de riesgo" value={@stats.pending_risk} />
+      <.stat_card label="Aprobadas" value={@stats.approved} />
+      <.stat_card label="Rechazadas" value={@stats.rejected} />
+    </div>
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
       <!-- Panel de creación -->
       <div class="lg:col-span-1">
@@ -273,7 +342,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 <% end %>
               </select>
             </div>
-            
+
     <!-- Nombre completo -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -288,7 +357,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-            
+
     <!-- Documento -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -303,7 +372,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-            
+
     <!-- Monto e ingreso -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -350,7 +419,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
           </form>
         </div>
       </div>
-      
+
     <!-- Panel de lista -->
       <div class="lg:col-span-2">
         <div class="bg-white shadow rounded-2xl p-6">
@@ -363,9 +432,10 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
               </p>
             </div>
-            
+
     <!-- Filtros -->
             <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
+              <!-- País -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
                   País
@@ -381,6 +451,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 </select>
               </div>
 
+    <!-- Estado -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
                   Estado
@@ -394,6 +465,74 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                     <option value={s} selected={@filter_status == s}>{s}</option>
                   <% end %>
                 </select>
+              </div>
+
+    <!-- Sólo evaluadas -->
+              <div class="flex items-center mt-2 sm:mt-0">
+                <input
+                  type="checkbox"
+                  name="only_evaluated"
+                  value="true"
+                  checked={@only_evaluated}
+                  class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span class="ml-2 text-xs text-slate-600">
+                  Sólo con riesgo evaluado
+                </span>
+              </div>
+
+    <!-- Rango de monto -->
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  Monto (mín)
+                </label>
+                <input
+                  type="number"
+                  name="min_amount"
+                  step="0.01"
+                  min="0"
+                  value={@filter_min_amount || ""}
+                  class="block w-28 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  Monto (máx)
+                </label>
+                <input
+                  type="number"
+                  name="max_amount"
+                  step="0.01"
+                  min="0"
+                  value={@filter_max_amount || ""}
+                  class="block w-28 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+
+    <!-- Rango de fechas -->
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  Desde
+                </label>
+                <input
+                  type="date"
+                  name="from_date"
+                  value={@filter_from_date || ""}
+                  class="block w-36 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label class="block text-xs font-medium text-slate-600 mb-1">
+                  Hasta
+                </label>
+                <input
+                  type="date"
+                  name="to_date"
+                  value={@filter_to_date || ""}
+                  class="block w-36 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
+                />
               </div>
             </form>
           </div>
@@ -436,34 +575,34 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       <td class="py-2 px-3">
                         {country_badge(app.country)}
                       </td>
-                      
+
     <!-- Nombre -->
                       <td class="py-2 px-3 text-slate-800">
                         {app.full_name}
                       </td>
-                      
+
     <!-- Monto -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.amount}
                       </td>
-                      
+
     <!-- Ingreso mensual -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.monthly_income}
                       </td>
-                      
+
     <!-- Estado -->
                       <td class="py-2 px-3 text-center">
                         {status_badge(app.status)}
                       </td>
-                      
+
     <!-- Score: sólo backoffice ve el chip -->
                       <%= if backoffice?(@current_scope) do %>
                         <td class="py-2 px-3 text-center">
                           {risk_score_chip(app.risk_score)}
                         </td>
                       <% end %>
-                      
+
     <!-- Fecha creación -->
                       <td class="py-2 px-3 text-right text-xs text-slate-500">
                         {Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M")}
@@ -474,111 +613,202 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </tbody>
             </table>
           </div>
-          
+
     <!-- Panel de detalle -->
           <div class="mt-6">
             <%= if @selected_app do %>
               <div class="border border-slate-200 rounded-2xl p-4 bg-slate-50">
                 <div class="flex items-start justify-between gap-4">
-                  <div>
-                    <h3 class="text-sm font-semibold text-slate-800 mb-1">
-                      Detalle de solicitud
-                    </h3>
-                    <p class="text-xs text-slate-500">
-                      ID: <span class="font-mono">{@selected_app.id}</span>
-                    </p>
-                  </div>
-
-                  <button
-                    type="button"
-                    phx-click="clear_selection"
-                    class="text-xs text-slate-500 hover:text-slate-700"
-                  >
-                    Cerrar
-                  </button>
-                </div>
-
-                <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
-                  <!-- Columna 1 -->
-                  <div class="space-y-1">
-                    <p>
-                      <span class="font-medium text-slate-600">País:</span>
-                      <span class="ml-1 font-mono text-xs">{@selected_app.country}</span>
-                    </p>
-                    <p>
-                      <span class="font-medium text-slate-600">Nombre:</span>
-                      <span class="ml-1 text-slate-800">{@selected_app.full_name}</span>
-                    </p>
-                    <p>
-                      <span class="font-medium text-slate-600">Documento:</span>
-                      <span class="ml-1 text-slate-800">
-                        {render_document(@selected_app.country, @selected_app.document)}
-                      </span>
-                    </p>
-                  </div>
-                  
-    <!-- Columna 2 -->
-                  <div class="space-y-1">
-                    <p>
-                      <span class="font-medium text-slate-600">Monto:</span>
-                      <span class="ml-1">€ {@selected_app.amount}</span>
-                    </p>
-                    <p>
-                      <span class="font-medium text-slate-600">Ingreso mensual:</span>
-                      <span class="ml-1">€ {@selected_app.monthly_income}</span>
-                    </p>
-                    <p class="flex items-center gap-2">
-                      <span class="font-medium text-slate-600">Estado:</span>
-                      {status_badge(@selected_app.status)}
-                    </p>
-                    <p>
-                      <span class="font-medium text-slate-600">Score de riesgo:</span>
-                      <%= if @selected_app.risk_score do %>
-                        <span class="ml-1 font-mono text-xs">{@selected_app.risk_score}</span>
-                      <% else %>
-                        <span class="ml-1 text-xs text-slate-400 italic">pendiente</span>
-                      <% end %>
-                    </p>
-                  </div>
-                  
-    <!-- Columna 3 -->
-                  <div class="space-y-1">
-                    <%= if backoffice?(@current_scope) do %>
-                      <%= if @selected_app.bank_profile do %>
-                        <% profile = @selected_app.bank_profile %>
-                        <% total_debt = map_get(profile, [:total_debt]) %>
-                        <% avg_balance = map_get(profile, [:avg_balance]) %>
-                        <% external_id = map_get(profile, [:external_id]) %>
-                        <% currency = map_get(profile, [:currency]) || "EUR" %>
-
-                        <p>
-                          <span class="font-medium text-slate-600">Identificador externo:</span>
-                          <span class="ml-1 text-xs font-mono">{external_id}</span>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Deuda total:</span>
-                          <span class="ml-1">
-                            {currency} {total_debt || "N/D"}
-                          </span>
-                        </p>
-                        <p>
-                          <span class="font-medium text-slate-600">Saldo promedio:</span>
-                          <span class="ml-1">
-                            {currency} {avg_balance || "N/D"}
-                          </span>
-                        </p>
-                      <% else %>
-                        <p class="text-xs text-slate-400 italic">
-                          Sin información bancaria disponible.
-                        </p>
-                      <% end %>
-                    <% else %>
-                      <p class="text-xs text-slate-400 italic">
-                        Información bancaria disponible sólo para usuarios backoffice.
+                  <div class="flex items-center gap-3">
+                    {risk_level_badge(@selected_app)}
+                    <div>
+                      <h3 class="text-sm font-semibold text-slate-800 mb-1">
+                        Detalle de solicitud
+                      </h3>
+                      <p class="text-xs text-slate-500">
+                        ID: <span class="font-mono">{@selected_app.id}</span>
                       </p>
-                    <% end %>
+                    </div>
+                  </div>
+
+                  <div class="flex items-center gap-2">
+                    <button
+                      type="button"
+                      phx-click="toggle_raw_json"
+                      class="text-xs px-2 py-1 rounded-full border border-slate-300 text-slate-600 hover:bg-slate-100"
+                    >
+                      {if @show_raw_json, do: "Ocultar JSON", else: "Ver JSON completo"}
+                    </button>
+
+                    <button
+                      type="button"
+                      phx-click="clear_selection"
+                      class="text-xs text-slate-500 hover:text-slate-700"
+                    >
+                      Cerrar
+                    </button>
                   </div>
                 </div>
+
+                <%= if @show_raw_json do %>
+                  <div class="mt-4">
+                    <pre class="text-xs bg-slate-900 text-slate-100 rounded-xl p-3 overflow-x-auto">
+                      {Jason.encode!(@selected_app, pretty: true)}
+                    </pre>
+                  </div>
+                <% else %>
+                  <div class="mt-4 grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                    <!-- Columna 1 -->
+                    <div class="space-y-1">
+                      <p>
+                        <span class="font-medium text-slate-600">País:</span>
+                        <span class="ml-1 font-mono text-xs">{@selected_app.country}</span>
+                      </p>
+                      <p>
+                        <span class="font-medium text-slate-600">Nombre:</span>
+                        <span class="ml-1 text-slate-800">{@selected_app.full_name}</span>
+                      </p>
+                      <p>
+                        <span class="font-medium text-slate-600">Documento:</span>
+                        <span class="ml-1 text-slate-800">
+                          {render_document(@selected_app.country, @selected_app.document)}
+                        </span>
+                      </p>
+                    </div>
+
+    <!-- Columna 2 -->
+                    <div class="space-y-1">
+                      <p>
+                        <span class="font-medium text-slate-600">Monto:</span>
+                        <span class="ml-1">€ {@selected_app.amount}</span>
+                      </p>
+                      <p>
+                        <span class="font-medium text-slate-600">Ingreso mensual:</span>
+                        <span class="ml-1">€ {@selected_app.monthly_income}</span>
+                      </p>
+                      <p class="flex items-center gap-2">
+                        <span class="font-medium text-slate-600">Estado:</span>
+                        {status_badge(@selected_app.status)}
+                      </p>
+                      <p>
+                        <span class="font-medium text-slate-600">Score de riesgo:</span>
+                        <%= if @selected_app.risk_score do %>
+                          <span class="ml-1 font-mono text-xs">{@selected_app.risk_score}</span>
+                        <% else %>
+                          <span class="ml-1 text-xs text-slate-400 italic">pendiente</span>
+                        <% end %>
+                        <button
+                          type="button"
+                          phx-click="re_evaluate_risk"
+                          phx-value-id={@selected_app.id}
+                          class="ml-2 inline-flex items-center px-2 py-1 rounded-full text-[11px] font-medium border border-indigo-200 text-indigo-700 bg-indigo-50 hover:bg-indigo-100"
+                        >
+                          Re-evaluar riesgo
+                        </button>
+                      </p>
+                    </div>
+
+    <!-- Columna 3 -->
+<div class="space-y-1">
+  <%= if backoffice?(@current_scope) do %>
+    <%= if @selected_app.bank_profile do %>
+      <% profile = @selected_app.bank_profile %>
+      <% total_debt = map_get(profile, [:total_debt]) %>
+      <% avg_balance = map_get(profile, [:avg_balance]) %>
+      <% external_id = map_get(profile, [:external_id]) %>
+      <% currency = map_get(profile, [:currency]) || "EUR" %>
+
+      <p>
+        <span class="font-medium text-slate-600">Identificador externo:</span>
+        <span class="ml-1 text-xs font-mono">{external_id}</span>
+      </p>
+      <p>
+        <span class="font-medium text-slate-600">Deuda total:</span>
+        <span class="ml-1">
+          {currency} {total_debt || "N/D"}
+        </span>
+      </p>
+      <p>
+        <span class="font-medium text-slate-600">Saldo promedio:</span>
+        <span class="ml-1">
+          {currency} {avg_balance || "N/D"}
+        </span>
+      </p>
+
+      <div class="mt-6 border-t border-slate-200 pt-4">
+        <h4 class="text-xs font-semibold text-slate-500 uppercase tracking-wide mb-3">
+          Timeline (simulada)
+        </h4>
+
+        <ol class="relative border-l border-slate-200 pl-4 space-y-3">
+          <%= for event <- build_timeline(@selected_app) do %>
+            <li class="relative">
+              <span class={[
+                "absolute -left-2 top-1 h-3 w-3 rounded-full border border-white shadow",
+                case event.type do
+                  :created ->
+                    "bg-slate-400"
+
+                  :risk_evaluated ->
+                    "bg-indigo-500"
+
+                  :final_status ->
+                    if @selected_app.status == "APPROVED",
+                      do: "bg-emerald-500",
+                      else: "bg-rose-500"
+                end
+              ]} />
+
+              <p class="text-xs text-slate-500">
+                {Calendar.strftime(event.at, "%Y-%m-%d %H:%M")}
+              </p>
+              <p class="text-sm text-slate-800">
+                {event.label}
+              </p>
+            </li>
+          <% end %>
+        </ol>
+      </div>
+    <% else %>
+      <p class="text-xs text-slate-400 italic">
+        Sin información bancaria disponible.
+      </p>
+    <% end %>
+
+    <!-- Acciones de integración -->
+    <div class="mt-4 flex flex-wrap gap-2">
+      <% disabled = is_nil(@selected_app.risk_score) %>
+
+      <button
+        type="button"
+        phx-click="resend_webhook"
+        phx-value-id={@selected_app.id}
+        disabled={disabled}
+        class={[
+          "inline-flex items-center px-2.5 py-1.5 rounded-full text-[11px] font-medium border shadow-sm",
+          disabled &&
+            "opacity-60 cursor-not-allowed border-slate-200 text-slate-400 bg-slate-50",
+          !disabled &&
+            "border-amber-200 text-amber-800 bg-amber-50 hover:bg-amber-100"
+        ]}
+      >
+        Re-enviar webhook
+      </button>
+
+      <%= if disabled do %>
+        <p class="text-[11px] text-slate-400">
+          Disponible cuando el riesgo esté evaluado.
+        </p>
+      <% end %>
+    </div>
+  <% else %>
+    <p class="text-xs text-slate-400 italic">
+      Información bancaria disponible sólo para usuarios backoffice.
+    </p>
+  <% end %>
+</div>
+                  </div>
+                <% end %>
               </div>
             <% end %>
           </div>
@@ -686,6 +916,23 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     """
   end
 
+  attr :label, :string, required: true
+  attr :value, :any, required: true
+
+  defp stat_card(assigns) do
+    ~H"""
+    <div class="rounded-2xl border border-slate-200 bg-white/70 p-4 shadow-sm">
+      <p class="text-[11px] font-medium uppercase tracking-wide text-slate-500">
+        {@label}
+      </p>
+
+      <p class="mt-1 text-2xl font-semibold text-slate-900">
+        {@value}
+      </p>
+    </div>
+    """
+  end
+
   defp risk_score_chip(nil) do
     assigns = %{}
 
@@ -724,6 +971,123 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     """
   end
 
+  # Nivel de riesgo a partir del score numérico
+  defp risk_level(score) when is_integer(score) do
+    cond do
+      score >= 740 -> {:low, "Riesgo bajo"}
+      score >= 660 -> {:medium, "Riesgo medio"}
+      true -> {:high, "Riesgo alto"}
+    end
+  end
+
+  defp risk_level(nil), do: {:unknown, "Pendiente"}
+
+  defp risk_level_badge(nil) do
+    assigns = %{}
+
+    ~H"""
+    <span class="inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-500">
+      Pendiente
+    </span>
+    """
+  end
+
+  defp risk_level_badge(score) when is_integer(score) do
+    {level, label} = risk_level(score)
+
+    {bg, text} =
+      case level do
+        :low -> {"bg-emerald-50", "text-emerald-700"}
+        :medium -> {"bg-amber-50", "text-amber-700"}
+        :high -> {"bg-rose-50", "text-rose-700"}
+        _ -> {"bg-slate-100", "text-slate-500"}
+      end
+
+    assigns = %{label: label, bg: bg, text: text}
+
+    ~H"""
+    <span class={"inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium #{ @bg } #{ @text }"}>
+      {@label}
+    </span>
+    """
+  end
+
+  defp build_timeline(app) do
+    base = [
+      %{
+        label: "Solicitud creada",
+        at: app.inserted_at,
+        type: :created
+      }
+    ]
+
+    base =
+      if app.risk_score do
+        base ++
+          [
+            %{
+              label: "Riesgo evaluado (score #{app.risk_score})",
+              at: app.updated_at,
+              type: :risk_evaluated
+            }
+          ]
+      else
+        base
+      end
+
+    base =
+      if app.status in ["APPROVED", "REJECTED"] do
+        base ++
+          [
+            %{
+              label: "Solicitud #{String.downcase(app.status)}",
+              at: app.updated_at,
+              type: :final_status
+            }
+          ]
+      else
+        base
+      end
+
+    Enum.sort_by(base, & &1.at)
+  end
+
+  @impl true
+  def handle_event("re_evaluate_risk", %{"id" => id}, socket) do
+    case EvaluateRisk.enqueue(id) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(:success_message, "Re-evaluación de riesgo encolada correctamente.")
+         |> assign(:error_message, nil)}
+
+      {:error, reason} ->
+        {:noreply,
+         socket
+         |> assign(:error_message, "No se pudo encolar la re-evaluación: #{inspect(reason)}")
+         |> assign(:success_message, nil)}
+    end
+  end
+
+  @impl true
+def handle_event("resend_webhook", %{"id" => id}, socket) do
+  case WebhookNotifier.enqueue(id) do
+    :ok ->
+      {:noreply,
+       socket
+       |> assign(:success_message, "Webhook reenviado correctamente.")
+       |> assign(:error_message, nil)}
+       |> schedule_clear_messages()
+
+    {:error, reason} ->
+      {:noreply,
+       socket
+       |> assign(:error_message, "No se pudo reenviar el webhook: #{inspect(reason)}")
+       |> assign(:success_message, nil)}
+       |> schedule_clear_messages()
+  end
+end
+
   defp render_document("ES", doc) when is_map(doc) do
     doc["dni"] || doc[:dni] || doc["nif"] || doc[:nif] || doc["nie"] || doc[:nie] || "N/D"
   end
@@ -750,6 +1114,69 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     ArgumentError -> Map.get(map, key) || Map.get(map, to_string(key))
   end
 
+@impl true
+  def handle_info(%{event: "status_changed", payload: payload}, socket) do
+    apps =
+      Enum.map(socket.assigns.applications, fn app ->
+        if app.id == payload.id do
+          %{app | status: payload.status, risk_score: payload.risk_score}
+        else
+          app
+        end
+      end)
+
+    selected_app =
+      case socket.assigns.selected_app do
+        %{} = sel when sel.id == payload.id ->
+          %{sel | status: payload.status, risk_score: payload.risk_score}
+
+        other ->
+          other
+      end
+
+    {:noreply,
+     socket
+     |> assign(:applications, apps)
+     |> assign(:selected_app, selected_app)}
+  end
+
+  @impl true
+  def handle_info(
+        %Phoenix.Socket.Broadcast{
+          topic: "applications",
+          event: "updated",
+          payload: %{id: id}
+        },
+        socket
+      ) do
+    applications =
+      Queries.list_applications(%{
+        country: socket.assigns.filter_country,
+        status: socket.assigns.filter_status
+      })
+
+  defp schedule_clear_messages(socket) do
+  # En ~3s limpiamos mensajes de éxito y error
+  Process.send_after(self(), :clear_messages, 3_000)
+  socket
+end
+
+def handle_info(:clear_messages, socket) do
+  {:noreply,
+   socket
+   |> assign(:success_message, nil)
+   |> assign(:error_message, nil)}
+end
+
   defp backoffice?(%{role: "backoffice"}), do: true
   defp backoffice?(_), do: false
+
+  defp build_stats(applications) do
+    %{
+      total: Enum.count(applications),
+      pending_risk: Enum.count(applications, &(&1.status == "PENDING_RISK")),
+      approved: Enum.count(applications, &(&1.status == "APPROVED")),
+      rejected: Enum.count(applications, &(&1.status == "REJECTED"))
+    }
+  end
 end

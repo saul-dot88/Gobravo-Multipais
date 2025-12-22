@@ -18,7 +18,8 @@ defmodule BravoMultipaisWeb.ApplicationControllerTest do
     "full_name" => "Juan Pérez",
     "document_value" => "12345678Z",
     "amount" => "20000",
-    "monthly_income" => "200"   # Debajo del umbral para disparar :income_too_low
+    # Debajo del umbral para disparar :income_too_low
+    "monthly_income" => "200"
   }
 
   # --- setup: siempre meter un token de backoffice en el header ---
