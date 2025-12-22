@@ -11,8 +11,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
   alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
-    alias BravoMultipaisWeb.Endpoint
-
+  alias BravoMultipaisWeb.Endpoint
 
   require Logger
 

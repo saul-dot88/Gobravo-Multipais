@@ -67,12 +67,9 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
     assert event in ["updated", "status_changed"]
   end
 
-  test "perform/1 levanta error si la aplicación no existe" do
-    fake_id = Ecto.UUID.generate()
-    job = %Job{args: %{"application_id" => fake_id}}
+  test "perform/1 hace no-op si la aplicación no existe" do
+    job = %Oban.Job{args: %{"application_id" => Ecto.UUID.generate()}}
 
-    assert_raise Ecto.NoResultsError, fn ->
-      EvaluateRisk.perform(job)
-    end
+    assert :ok = EvaluateRisk.perform(job)
   end
 end

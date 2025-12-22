@@ -97,27 +97,27 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   end
 
   defp build_fake_bank_profile(app, score) do
-  amount = app.amount || Decimal.new(0)
-  income = app.monthly_income || Decimal.new(0)
+    amount = app.amount || Decimal.new(0)
+    income = app.monthly_income || Decimal.new(0)
 
-  total_debt =
-    amount
-    |> Decimal.mult(Decimal.new("0.8"))
-    |> Decimal.to_float()
+    total_debt =
+      amount
+      |> Decimal.mult(Decimal.new("0.8"))
+      |> Decimal.to_float()
 
-  avg_balance =
-    income
-    |> Decimal.mult(Decimal.new("3.5"))
-    |> Decimal.to_float()
+    avg_balance =
+      income
+      |> Decimal.mult(Decimal.new("3.5"))
+      |> Decimal.to_float()
 
-  %{
-    country: app.country,
-    currency: "EUR",
-    score: score,
-    total_debt: total_debt,
-    avg_balance: avg_balance,
-    external_id: "BANK-#{mask_doc(app.document)}"
-  }
+    %{
+      country: app.country,
+      currency: "EUR",
+      score: score,
+      total_debt: total_debt,
+      avg_balance: avg_balance,
+      external_id: "BANK-#{mask_doc(app.document)}"
+    }
   end
 
   defp mask_doc(%{"dni" => dni}) when is_binary(dni), do: dni

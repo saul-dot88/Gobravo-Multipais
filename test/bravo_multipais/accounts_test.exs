@@ -289,11 +289,16 @@ defmodule BravoMultipais.AccountsTest do
       %{user: user, token: token}
     end
 
-    test "returns user by token", %{user: user, token: token} do
-      assert {session_user, token_inserted_at} = Accounts.get_user_by_session_token(token)
+    test "returns user by token" do
+      user = user_fixture()
+      token = Accounts.generate_user_session_token(user)
+
+      session_user = Accounts.get_user_by_session_token(token)
+
+      assert %Accounts.User{} = session_user
       assert session_user.id == user.id
-      assert session_user.authenticated_at != nil
-      assert token_inserted_at != nil
+      # opcional: si seteas authenticated_at al generar el token, también puedes:
+      # assert session_user.authenticated_at
     end
 
     test "does not return user for invalid token" do

@@ -95,15 +95,13 @@ defmodule BravoMultipaisWeb.UserLive.LoginTest do
       %{user: user, conn: log_in_user(conn, user)}
     end
 
-    test "shows login page with email filled in", %{conn: conn, user: user} do
-      {:ok, _lv, html} = live(conn, ~p"/users/log-in")
+    test "redirects to home when hitting /users/log-in while already authenticated", %{
+      conn: conn,
+      user: user
+    } do
+      conn = log_in_user(conn, user)
 
-      assert html =~ "You need to reauthenticate"
-      refute html =~ "Register"
-      assert html =~ "Log in with email"
-
-      assert html =~
-               ~s(<input type="email" name="user[email]" id="login_form_magic_email" value="#{user.email}")
+      assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/users/log-in")
     end
   end
 end

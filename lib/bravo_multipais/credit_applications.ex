@@ -171,20 +171,81 @@ defmodule BravoMultipais.CreditApplications do
   # Proyección pública
   # ─────────────────────────────────────────────────────────────
 
-  @spec to_public(Application.t()) :: map()
+  @doc """
+  Proyección pública de una Application.
+
+  - Expone sólo los campos de lectura.
+  - Sanitiza el `bank_profile` para no filtrar datos internos.
+  """
   def to_public(%Application{} = app) do
-    %{
+    base = %{
       id: app.id,
       country: app.country,
       full_name: app.full_name,
-      document: app.document,
-      amount: app.amount,
-      monthly_income: app.monthly_income,
       status: app.status,
       risk_score: app.risk_score,
-      external_reference: app.external_reference,
+      amount: app.amount,
+      monthly_income: app.monthly_income,
       inserted_at: app.inserted_at,
+      document: public_document(app.document),
+      external_reference: app.external_reference,
       updated_at: app.updated_at
     }
+
+    bank_profile =
+      case app.bank_profile do
+        nil ->
+          nil
+
+        %{} = bp ->
+          bp
+          |> normalize_string_keys()
+          |> Map.take(~w(external_id total_debt avg_balance currency))
+      end
+
+    Map.put(base, :bank_profile, bank_profile)
   end
+
+  defp public_document(nil), do: nil
+
+  defp public_document(%{} = doc) do
+    # Aquí deja tu lógica actual (NIF, codice_fiscale, etc),
+    # o si ya la tienes, respétala. Ejemplo genérico:
+    cond do
+      Map.has_key?(doc, "nif") -> doc["nif"]
+      Map.has_key?(doc, :nif) -> doc[:nif]
+      Map.has_key?(doc, "codice_fiscale") -> doc["codice_fiscale"]
+      Map.has_key?(doc, :codice_fiscale) -> doc[:codice_fiscale]
+      true -> nil
+    end
+  end
+
+  defp normalize_string_keys(map) do
+    map
+    |> Enum.into(%{}, fn
+      {k, v} when is_atom(k) -> {Atom.to_string(k), v}
+      {k, v} -> {k, v}
+    end)
+  end
+
+  # ── Sanitizado de bank_profile ─────────────────
+
+  # Sin perfil → devuelve nil pero **con la key** presente
+  defp sanitize_bank_profile(nil), do: nil
+
+  # Perfil válido → nos quedamos sólo con las cosas "externas"
+  defp sanitize_bank_profile(%{} = profile) do
+    profile
+    |> Map.take([
+      :country,
+      :currency,
+      :score,
+      :external_id,
+      :total_debt,
+      :avg_balance
+    ])
+  end
+
+  # Cualquier otra cosa rara → nil
+  defp sanitize_bank_profile(_), do: nil
 end

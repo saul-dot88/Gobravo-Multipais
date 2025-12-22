@@ -32,7 +32,10 @@ defmodule BravoMultipaisWeb.UserLive.ConfirmationTest do
       assert html =~ "Keep me logged in on this device"
     end
 
-    test "renders login page for already logged in user", %{conn: conn, confirmed_user: user} do
+    test "redirects to home when already logged in and hitting magic link", %{
+      conn: conn,
+      confirmed_user: user
+    } do
       conn = log_in_user(conn, user)
 
       token =
@@ -40,9 +43,7 @@ defmodule BravoMultipaisWeb.UserLive.ConfirmationTest do
           Accounts.deliver_login_instructions(user, url)
         end)
 
-      {:ok, _lv, html} = live(conn, ~p"/users/log-in/#{token}")
-      refute html =~ "Confirm my account"
-      assert html =~ "Log in"
+      assert {:error, {:redirect, %{to: "/"}}} = live(conn, ~p"/users/log-in/#{token}")
     end
 
     test "confirms the given token once", %{conn: conn, unconfirmed_user: user} do
