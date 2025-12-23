@@ -72,15 +72,10 @@ defmodule BravoMultipais.Bank.Normalizer do
   """
   @spec build_document_map(String.t(), String.t() | nil) :: map()
   def build_document_map(country, raw_value) do
-    IO.inspect(raw_value)
-
     value =
       raw_value
       |> safe_to_string()
       |> String.trim()
-
-    IO.inspect(value)
-    IO.inspect(country)
 
     case country |> to_string() |> String.upcase() do
       "ES" ->

@@ -4,8 +4,12 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     max_attempts: 3
 
   alias BravoMultipais.Repo
+  alias BravoMultipais.LogSanitizer
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipaisWeb.Endpoint
+
+    require Logger
+
 
   @topic "applications"
 
@@ -52,7 +56,13 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
               risk_score: updated_app.risk_score
             })
 
-            IO.puts("Risk evaluation completed for #{updated_app.id}")
+            Logger.info("Risk evaluation completed",
+              application_id: app.id,
+              country: app.country,
+              risk_score: app.risk_score,
+              document_masked: LogSanitizer.mask_document(app.document)
+            )
+
             :ok
 
           {:error, changeset} ->

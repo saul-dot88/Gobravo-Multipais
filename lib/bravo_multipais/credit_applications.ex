@@ -20,6 +20,9 @@ defmodule BravoMultipais.CreditApplications do
           optional(:only_evaluated) => boolean()
         }
 
+  # Campos que SÍ queremos exponer de bank_profile
+  @allowed_bank_profile_fields ~w(external_id total_debt avg_balance currency)
+
   # ─────────────────────────────────────────────────────────────
   # Lecturas / queries
   # ─────────────────────────────────────────────────────────────
@@ -27,8 +30,10 @@ defmodule BravoMultipais.CreditApplications do
   @doc """
   Lista solicitudes aplicando filtros opcionales.
 
-  Esta versión se usa desde el LiveView (backoffice).
+  Esta versión se usa desde el LiveView (backoffice) y devuelve
+  la versión **pública/sanitizada** de cada Application.
   """
+  @spec list_applications(filters()) :: [map()]
   def list_applications(filters \\ %{}) do
     base =
       from a in Application,
@@ -41,6 +46,7 @@ defmodule BravoMultipais.CreditApplications do
     |> maybe_filter_date_range(filters[:from_date], filters[:to_date])
     |> maybe_filter_only_evaluated(filters[:only_evaluated])
     |> Repo.all()
+    |> Enum.map(&to_public/1)
   end
 
   defp maybe_filter_country(query, nil), do: query
@@ -72,7 +78,6 @@ defmodule BravoMultipais.CreditApplications do
   defp maybe_filter_date_range(query, nil, nil), do: query
 
   defp maybe_filter_date_range(query, from_date, nil) do
-    # "2025-12-20" -> ~N[2025-12-20 00:00:00]
     {:ok, from} = NaiveDateTime.from_iso8601("#{from_date} 00:00:00")
 
     from a in query,
@@ -101,10 +106,10 @@ defmodule BravoMultipais.CreditApplications do
   defp maybe_filter_only_evaluated(query, _), do: query
 
   @doc """
-  Versión pública de `list_applications/1`, ya proyectada a JSON-safe.
+  Versión pública de `list_applications/1` para API, delegada a `Queries`.
 
-  Esta se sigue delegando a `Queries`, para mantener separados
-  los contratos de API pública y el backoffice.
+  Aquí asumimos que `Queries` ya hace la proyección adecuada para la API
+  externa (puede usar `to_public/1` por dentro).
   """
   @spec list_applications_public(map()) :: [map()]
   def list_applications_public(params \\ %{}) do
@@ -177,6 +182,9 @@ defmodule BravoMultipais.CreditApplications do
   - Expone sólo los campos de lectura.
   - Sanitiza el `bank_profile` para no filtrar datos internos.
   """
+  @spec to_public(Application.t() | nil) :: map() | nil
+  def to_public(nil), do: nil
+
   def to_public(%Application{} = app) do
     base = %{
       id: app.id,
@@ -192,25 +200,12 @@ defmodule BravoMultipais.CreditApplications do
       updated_at: app.updated_at
     }
 
-    bank_profile =
-      case app.bank_profile do
-        nil ->
-          nil
-
-        %{} = bp ->
-          bp
-          |> normalize_string_keys()
-          |> Map.take(~w(external_id total_debt avg_balance currency))
-      end
-
-    Map.put(base, :bank_profile, bank_profile)
+    Map.put(base, :bank_profile, sanitize_bank_profile(app.bank_profile))
   end
 
   defp public_document(nil), do: nil
 
   defp public_document(%{} = doc) do
-    # Aquí deja tu lógica actual (NIF, codice_fiscale, etc),
-    # o si ya la tienes, respétala. Ejemplo genérico:
     cond do
       Map.has_key?(doc, "nif") -> doc["nif"]
       Map.has_key?(doc, :nif) -> doc[:nif]
@@ -230,20 +225,14 @@ defmodule BravoMultipais.CreditApplications do
 
   # ── Sanitizado de bank_profile ─────────────────
 
-  # Sin perfil → devuelve nil pero **con la key** presente
+  # Sin perfil → devuelve nil
   defp sanitize_bank_profile(nil), do: nil
 
-  # Perfil válido → nos quedamos sólo con las cosas "externas"
+  # Perfil válido → normaliza claves a string y se queda con los campos permitidos
   defp sanitize_bank_profile(%{} = profile) do
     profile
-    |> Map.take([
-      :country,
-      :currency,
-      :score,
-      :external_id,
-      :total_debt,
-      :avg_balance
-    ])
+    |> normalize_string_keys()
+    |> Map.take(@allowed_bank_profile_fields)
   end
 
   # Cualquier otra cosa rara → nil
