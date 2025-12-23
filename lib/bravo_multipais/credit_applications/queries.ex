@@ -5,8 +5,8 @@ defmodule BravoMultipais.CreditApplications.Queries do
 
   import Ecto.Query, only: [from: 2, order_by: 2]
 
-  alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
+  alias BravoMultipais.Repo
 
   @spec get_application(Ecto.UUID.t()) :: Application.t() | nil
   def get_application(id), do: Repo.get(Application, id)

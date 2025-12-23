@@ -16,6 +16,7 @@ defmodule BravoMultipaisWeb.ConnCase do
   """
 
   use ExUnit.CaseTemplate
+  alias BravoMultipais.Accounts.Scope
 
   using do
     quote do
@@ -46,7 +47,7 @@ defmodule BravoMultipaisWeb.ConnCase do
   """
   def register_and_log_in_user(%{conn: conn} = context) do
     user = BravoMultipais.AccountsFixtures.user_fixture()
-    scope = BravoMultipais.Accounts.Scope.for_user(user)
+    scope = Scope.for_user(user)
 
     opts =
       context

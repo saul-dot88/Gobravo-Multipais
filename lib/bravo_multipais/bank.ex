@@ -65,27 +65,45 @@ defmodule BravoMultipais.Bank do
       |> get_field(["monthly_income"])
       |> decimal_to_float()
 
-    doc = get_field(attrs, ["document"]) || %{}
-
-    raw_doc =
-      doc["dni"] ||
-        doc[:dni] ||
-        doc["codice_fiscale"] ||
-        doc[:codice_fiscale] ||
-        doc["nif"] ||
-        doc[:nif] ||
-        doc["raw"] ||
-        doc[:raw] ||
-        "UNKNOWN"
+    raw_doc = extract_document_identifier(attrs)
 
     %{
       country: country,
       external_id: "BANK-#{raw_doc}",
-      total_debt: Float.round(monthly_income * 0.6, 2),
-      avg_balance: Float.round(monthly_income * 0.4, 2),
+      total_debt: compute_total_debt(monthly_income),
+      avg_balance: compute_avg_balance(monthly_income),
       score: 700,
       currency: "EUR"
     }
+  end
+
+  defp extract_document_identifier(attrs) do
+    doc = get_field(attrs, ["document"]) || %{}
+
+    candidates = [
+      Map.get(doc, "dni"),
+      Map.get(doc, :dni),
+      Map.get(doc, "codice_fiscale"),
+      Map.get(doc, :codice_fiscale),
+      Map.get(doc, "nif"),
+      Map.get(doc, :nif),
+      Map.get(doc, "raw"),
+      Map.get(doc, :raw)
+    ]
+
+    Enum.find(candidates, "UNKNOWN", fn
+      nil -> false
+      "" -> false
+      _value -> true
+    end)
+  end
+
+  defp compute_total_debt(monthly_income) do
+    Float.round(monthly_income * 0.6, 2)
+  end
+
+  defp compute_avg_balance(monthly_income) do
+    Float.round(monthly_income * 0.4, 2)
   end
 
   # Lee un campo aceptando tanto string como atom

@@ -1,7 +1,7 @@
 defmodule BravoMultipais.CreditApplications.CommandsTest do
   use BravoMultipais.DataCase, async: true
 
-  alias BravoMultipais.CreditApplications.{Commands, Application}
+  alias BravoMultipais.CreditApplications.{Application, Commands}
   alias BravoMultipais.Repo
 
   describe "create_application/1" do

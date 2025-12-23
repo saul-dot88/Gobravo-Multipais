@@ -1,8 +1,12 @@
 defmodule BravoMultipais.Accounts.UserNotifier do
+  @moduledoc """
+  Módulo responsable de enviar notificaciones relacionadas con cuentas de usuario,
+  como instrucciones de confirmación, cambio de contraseña o recuperación de acceso.
+  """
   import Swoosh.Email
 
-  alias BravoMultipais.Mailer
   alias BravoMultipais.Accounts.User
+  alias BravoMultipais.Mailer
 
   # Delivers the email using the application mailer.
   defp deliver(recipient, subject, body) do

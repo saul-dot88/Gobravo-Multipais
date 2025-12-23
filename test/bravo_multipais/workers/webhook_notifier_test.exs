@@ -2,9 +2,9 @@
 defmodule BravoMultipais.Workers.WebhookNotifierTest do
   use BravoMultipais.DataCase, async: true
 
-  alias BravoMultipais.Workers.WebhookNotifier
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Repo
+  alias BravoMultipais.Workers.WebhookNotifier
 
   describe "enqueue/1" do
     test "devuelve :ok para un application_id válido" do

@@ -1,4 +1,8 @@
 defmodule BravoMultipaisWeb.UserAuth do
+  @moduledoc """
+  Helpers de autenticación para la capa web: login/logout, carga del usuario
+  actual y enforcement de roles (por ejemplo, backoffice).
+  """
   use BravoMultipaisWeb, :verified_routes
 
   import Plug.Conn
@@ -8,6 +12,7 @@ defmodule BravoMultipaisWeb.UserAuth do
   alias BravoMultipais.Accounts.Scope
   alias BravoMultipais.Accounts.User
   alias BravoMultipaisWeb.Router.Helpers, as: Routes
+  alias LiveView
 
   # Make the remember me cookie valid for 14 days. This should match
   # the session validity setting in UserToken.
@@ -87,16 +92,29 @@ defmodule BravoMultipaisWeb.UserAuth do
   end
 
   defp ensure_user_token(conn) do
-    if token = get_session(conn, :user_token) do
-      {token, conn}
-    else
-      conn = fetch_cookies(conn, signed: [@remember_me_cookie])
+    case get_session(conn, :user_token) do
+      nil ->
+        ensure_user_token_from_remember_me(conn)
 
-      if token = conn.cookies[@remember_me_cookie] do
-        {token, conn |> put_token_in_session(token) |> put_session(:user_remember_me, true)}
-      else
+      token ->
+        {token, conn}
+    end
+  end
+
+  defp ensure_user_token_from_remember_me(conn) do
+    conn = fetch_cookies(conn, signed: [@remember_me_cookie])
+
+    case conn.cookies[@remember_me_cookie] do
+      nil ->
         {nil, conn}
-      end
+
+      token ->
+        conn =
+          conn
+          |> put_token_in_session(token)
+          |> put_session(:user_remember_me, true)
+
+        {token, conn}
     end
   end
 
@@ -226,13 +244,13 @@ defmodule BravoMultipaisWeb.UserAuth do
   def on_mount(:mount_current_scope, _params, session, socket) do
     socket =
       socket
-      |> Phoenix.LiveView.Utils.assign_new(:current_user, fn ->
+      |> LiveView.Utils.assign_new(:current_user, fn ->
         case session["user_token"] do
           nil -> nil
           token -> Accounts.get_user_by_session_token(token)
         end
       end)
-      |> Phoenix.LiveView.Utils.assign_new(:current_scope, fn %{current_user: user} ->
+      |> LiveView.Utils.assign_new(:current_scope, fn %{current_user: user} ->
         Scope.for_user(user, user && user.authenticated_at)
       end)
 
@@ -247,8 +265,8 @@ defmodule BravoMultipaisWeb.UserAuth do
     else
       socket =
         socket
-        |> Phoenix.LiveView.put_flash(:error, "You must log in to access this page.")
-        |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
+        |> LiveView.put_flash(:error, "You must log in to access this page.")
+        |> LiveView.redirect(to: ~p"/users/log-in")
 
       {:halt, socket}
     end
@@ -264,8 +282,8 @@ defmodule BravoMultipaisWeb.UserAuth do
     else
       socket =
         socket
-        |> Phoenix.LiveView.put_flash(:error, "You must re-authenticate to access this page.")
-        |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
+        |> LiveView.put_flash(:error, "You must re-authenticate to access this page.")
+        |> LiveView.redirect(to: ~p"/users/log-in")
 
       {:halt, socket}
     end
@@ -283,11 +301,11 @@ defmodule BravoMultipaisWeb.UserAuth do
         # Sin scope → lo tratamos como no autenticado
         socket =
           socket
-          |> Phoenix.LiveView.put_flash(
+          |> LiveView.put_flash(
             :error,
             "Debes iniciar sesión para acceder al backoffice."
           )
-          |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
+          |> LiveView.redirect(to: ~p"/users/log-in")
 
         {:halt, socket}
 
@@ -295,8 +313,8 @@ defmodule BravoMultipaisWeb.UserAuth do
         # Autenticado pero sin rol backoffice
         socket =
           socket
-          |> Phoenix.LiveView.put_flash(:error, "No tienes permisos para acceder al backoffice.")
-          |> Phoenix.LiveView.redirect(to: ~p"/")
+          |> LiveView.put_flash(:error, "No tienes permisos para acceder al backoffice.")
+          |> LiveView.redirect(to: ~p"/")
 
         {:halt, socket}
     end

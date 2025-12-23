@@ -6,7 +6,9 @@ defmodule BravoMultipais.Accounts do
   import Ecto.Query, warn: false
   alias BravoMultipais.Repo
 
-  alias BravoMultipais.Accounts.{User, UserToken, UserNotifier}
+  alias BravoMultipais.Accounts.User
+  alias BravoMultipais.Accounts.UserNotifier
+  alias BravoMultipais.Accounts.UserToken
 
   ## Database getters
 

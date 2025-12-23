@@ -14,9 +14,9 @@ defmodule BravoMultipais.Jobs.EvaluateRisk do
 
   use Oban.Worker, queue: :risk, max_attempts: 5
 
-  alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Policies.Factory, as: PolicyFactory
+  alias BravoMultipais.Repo
   alias BravoMultipaisWeb.Endpoint
   import Ecto.Changeset
 

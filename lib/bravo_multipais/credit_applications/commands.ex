@@ -13,10 +13,11 @@ defmodule BravoMultipais.CreditApplications.Commands do
     * Persiste la solicitud y encola un job de riesgo en Oban.
   """
 
-  alias BravoMultipais.{Repo, Bank}
+  alias BravoMultipais.{Bank, Repo}
   alias BravoMultipais.Bank.Normalizer
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Policies
+  alias EvaluateRisk
 
   @typedoc "Parámetros crudos que vienen del formulario LiveView o de la API"
   @type params :: map()
@@ -167,7 +168,7 @@ defmodule BravoMultipais.CreditApplications.Commands do
 
   defp enqueue_risk_job(%Application{id: id}) do
     %{application_id: id}
-    |> BravoMultipais.Workers.EvaluateRisk.new()
+    |> EvaluateRisk.new()
     |> Oban.insert()
     |> case do
       {:ok, _job} -> :ok

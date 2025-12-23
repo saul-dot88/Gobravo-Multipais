@@ -1,10 +1,10 @@
 defmodule BravoMultipaisWeb.UserAuthTest do
   use BravoMultipaisWeb.ConnCase, async: true
 
-  alias Phoenix.LiveView
   alias BravoMultipais.Accounts
   alias BravoMultipais.Accounts.Scope
   alias BravoMultipaisWeb.UserAuth
+  alias Phoenix.LiveView
 
   import BravoMultipais.AccountsFixtures
 

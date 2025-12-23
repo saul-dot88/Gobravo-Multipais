@@ -1,4 +1,7 @@
 defmodule BravoMultipais.Accounts.User do
+  @moduledoc """
+  Esquema y lógica asociada a usuarios del sistema (credenciales, roles y estado).
+  """
   use Ecto.Schema
   import Ecto.Changeset
 

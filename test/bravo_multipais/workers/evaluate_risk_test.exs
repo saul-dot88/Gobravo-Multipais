@@ -1,8 +1,8 @@
 defmodule BravoMultipais.Workers.EvaluateRiskTest do
   use BravoMultipais.DataCase, async: true
 
-  alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
+  alias BravoMultipais.Repo
   alias BravoMultipais.Workers.EvaluateRisk
   alias Oban.Job
 

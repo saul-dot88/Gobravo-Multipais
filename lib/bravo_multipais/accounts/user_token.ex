@@ -1,4 +1,8 @@
 defmodule BravoMultipais.Accounts.UserToken do
+  @moduledoc """
+  Lógica de emisión, verificación y almacenamiento de tokens de usuario
+  para autenticación y recuperación de sesión.
+  """
   use Ecto.Schema
   import Ecto.Query
   alias BravoMultipais.Accounts.UserToken

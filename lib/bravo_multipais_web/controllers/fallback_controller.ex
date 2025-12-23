@@ -50,38 +50,70 @@ defmodule BravoMultipaisWeb.FallbackController do
 
   # ---- helpers de modelo de error de negocio ----
 
-  defp business_error_payload(reason) do
-    {code, message} =
-      case reason do
-        :invalid_income ->
-          {"invalid_income", "Monthly income is invalid for this product/country"}
+  defp business_error_payload(:invalid_income) do
+    business_error_payload_base(
+      "invalid_income",
+      "Monthly income is invalid for this product/country"
+    )
+  end
 
-        {:invalid_income, :below_minimum_income} ->
-          {"invalid_income_below_minimum", "Monthly income is below the minimum allowed"}
+  defp business_error_payload({:invalid_income, :below_minimum_income}) do
+    business_error_payload_base(
+      "invalid_income_below_minimum",
+      "Monthly income is below the minimum allowed"
+    )
+  end
 
-        :invalid_amount ->
-          {"invalid_amount", "Requested amount must be greater than zero"}
+  defp business_error_payload(:invalid_amount) do
+    business_error_payload_base(
+      "invalid_amount",
+      "Requested amount must be greater than zero"
+    )
+  end
 
-        :amount_too_high_relative_to_income ->
-          {"amount_too_high_relative_to_income",
-           "Requested amount is too high relative to customer income"}
+  defp business_error_payload(:amount_too_high_relative_to_income) do
+    business_error_payload_base(
+      "amount_too_high_relative_to_income",
+      "Requested amount is too high relative to customer income"
+    )
+  end
 
-        :debt_to_income_too_high ->
-          {"debt_to_income_too_high", "Debt-to-income ratio is higher than the allowed threshold"}
+  defp business_error_payload(:debt_to_income_too_high) do
+    business_error_payload_base(
+      "debt_to_income_too_high",
+      "Debt-to-income ratio is higher than the allowed threshold"
+    )
+  end
 
-        :invalid_spanish_document ->
-          {"invalid_document_es", "Invalid Spanish document (DNI / NIF / NIE)"}
+  defp business_error_payload(:invalid_spanish_document) do
+    business_error_payload_base(
+      "invalid_document_es",
+      "Invalid Spanish document (DNI / NIF / NIE)"
+    )
+  end
 
-        :invalid_codice_fiscale ->
-          {"invalid_document_it", "Invalid Italian codice fiscale"}
+  defp business_error_payload(:invalid_codice_fiscale) do
+    business_error_payload_base(
+      "invalid_document_it",
+      "Invalid Italian codice fiscale"
+    )
+  end
 
-        :invalid_nif ->
-          {"invalid_document_pt", "Invalid Portuguese NIF"}
+  defp business_error_payload(:invalid_nif) do
+    business_error_payload_base(
+      "invalid_document_pt",
+      "Invalid Portuguese NIF"
+    )
+  end
 
-        other ->
-          {to_string(other), "Business rule violation"}
-      end
+  defp business_error_payload(other) do
+    business_error_payload_base(
+      to_string(other),
+      "Business rule violation"
+    )
+  end
 
+  defp business_error_payload_base(code, message) do
     %{
       error: "business_rules_failed",
       code: code,

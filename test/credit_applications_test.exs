@@ -1,4 +1,6 @@
 defmodule BravoMultipais.CreditApplicationsTest do
+  @moduledoc false
+
   use BravoMultipais.DataCase, async: true
 
   alias BravoMultipais.CreditApplications

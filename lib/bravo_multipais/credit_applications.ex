@@ -6,8 +6,8 @@ defmodule BravoMultipais.CreditApplications do
 
   import Ecto.Query, only: [from: 2]
 
-  alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
+  alias BravoMultipais.Repo
 
   @type application :: Application.t()
   @type filters :: %{
@@ -167,7 +167,7 @@ defmodule BravoMultipais.CreditApplications do
     end
   end
 
-  @spec change_application(Application.t() | %Application{}, map()) :: Ecto.Changeset.t()
+  @spec change_application(Application.t(), map()) :: Ecto.Changeset.t()
   def change_application(app \\ %Application{}, attrs \\ %{}) do
     Application.changeset(app, attrs)
   end

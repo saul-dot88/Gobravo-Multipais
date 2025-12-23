@@ -6,6 +6,7 @@ defmodule BravoMultipais.Policies.ES do
   """
 
   @behaviour BravoMultipais.Policies.Policy
+  @dni_letters "TRWAGMYFPDXBNJZSQVHLCKE"
 
   ## Callbacks
 
@@ -112,18 +113,32 @@ defmodule BravoMultipais.Policies.ES do
 
   # DNI: 8 dígitos + letra, con chequeo de letra
 
-  defp valid_dni_letter?(dni) when is_binary(dni) and byte_size(dni) == 9 do
-    # Normalizamos a mayúsculas por si viene en minúsculas
-    dni = String.upcase(dni)
-    <<number::binary-size(8), letter::binary-size(1)>> = dni
+  def valid_dni_letter?(dni) when is_binary(dni) do
+    dni =
+      dni
+      |> String.trim()
+      |> String.upcase()
 
-    with {digits_int, ""} <- Integer.parse(number) do
-      letters = "TRWAGMYFPDXBNJZSQVHLCKE"
-      expected_letter = String.at(letters, rem(digits_int, 23))
+    case dni do
+      <<digits::binary-size(8), letter::binary-size(1)>> ->
+        # Validar formato general 8 dígitos + letra
+        if String.match?(dni, ~r/^\d{8}[A-Z]$/) do
+          index =
+            digits
+            |> String.to_integer()
+            |> rem(23)
 
-      letter == expected_letter
-    else
-      _ -> false
+          # Usa tu constante si ya la tienes definida en el módulo
+
+          expected_letter = String.at(@dni_letters, index)
+
+          letter == expected_letter
+        else
+          false
+        end
+
+      _ ->
+        false
     end
   end
 

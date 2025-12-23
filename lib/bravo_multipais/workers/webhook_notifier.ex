@@ -9,8 +9,8 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
     queue: :webhooks,
     max_attempts: 5
 
-  alias BravoMultipais.Repo
   alias BravoMultipais.CreditApplications.Application
+  alias BravoMultipais.Repo
   alias BravoMultipaisWeb.Endpoint
 
   require Logger
@@ -81,42 +81,45 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
       url: url
     )
 
-    with {:ok, resp} <-
-           Finch.build(:post, url, headers, body)
-           |> Finch.request(BravoMultipais.Finch) do
-      case resp.status do
-        status when status in 200..299 ->
-          Logger.info("Webhook enviado correctamente",
-            application_id: app.id,
-            status: app.status,
-            http_status: status
-          )
+    request =
+      Finch.build(:post, url, headers, body)
+      |> Finch.request(BravoMultipais.Finch)
 
-          # refrescar UI igual que EvaluateRisk
-          Endpoint.broadcast(@topic, "status_changed", %{
-            id: app.id,
-            status: app.status,
-            risk_score: app.risk_score,
-            at: DateTime.utc_now()
-          })
+    case request do
+      {:ok, resp} ->
+        case resp.status do
+          status when status in 200..299 ->
+            Logger.info("Webhook enviado correctamente",
+              application_id: app.id,
+              status: app.status,
+              http_status: status
+            )
 
-          Endpoint.broadcast(@topic, "webhook_resent", %{
-            application_id: app.id,
-            at: DateTime.utc_now()
-          })
+            # refrescar UI igual que EvaluateRisk
+            Endpoint.broadcast(@topic, "status_changed", %{
+              id: app.id,
+              status: app.status,
+              risk_score: app.risk_score,
+              at: DateTime.utc_now()
+            })
 
-          :ok
+            Endpoint.broadcast(@topic, "webhook_resent", %{
+              application_id: app.id,
+              at: DateTime.utc_now()
+            })
 
-        status ->
-          Logger.error("Webhook respondió con error",
-            application_id: app.id,
-            http_status: status,
-            response: inspect(resp)
-          )
+            :ok
 
-          {:error, {:http_error, status}}
-      end
-    else
+          status ->
+            Logger.error("Webhook respondió con error",
+              application_id: app.id,
+              http_status: status,
+              response: inspect(resp)
+            )
+
+            {:error, {:http_error, status}}
+        end
+
       {:error, reason} ->
         Logger.error("Error HTTP enviando webhook",
           application_id: app.id,

@@ -1,4 +1,11 @@
 defmodule BravoMultipais.CreditApplications.Application do
+  @moduledoc """
+  Esquema principal de una solicitud de crédito multipaís.
+
+  Modela atributos como país, monto, ingreso mensual, estado,
+  `risk_score` y perfil bancario, y sirve de base para el flujo
+  de evaluación de riesgo y notificación de webhooks.
+  """
   use Ecto.Schema
   import Ecto.Changeset
 

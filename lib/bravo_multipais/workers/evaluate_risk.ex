@@ -1,15 +1,19 @@
 defmodule BravoMultipais.Workers.EvaluateRisk do
+  @moduledoc """
+  Worker Oban que simula la evaluación de riesgo de una solicitud de crédito,
+  actualiza el `risk_score` y publica cambios en PubSub/Kafka interno.
+  """
   use Oban.Worker,
     queue: :risk,
     max_attempts: 3
 
-  alias BravoMultipais.Repo
-  alias BravoMultipais.LogSanitizer
   alias BravoMultipais.CreditApplications.Application
+  alias BravoMultipais.Repo
+
+  alias BravoMultipais.LogSanitizer
   alias BravoMultipaisWeb.Endpoint
 
-    require Logger
-
+  require Logger
 
   @topic "applications"
 

@@ -1,4 +1,6 @@
 defmodule BravoMultipais.CreditApplicationsPublicTest do
+  @moduledoc false
+
   use ExUnit.Case, async: true
 
   alias BravoMultipais.CreditApplications

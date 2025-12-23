@@ -1,46 +1,62 @@
 defmodule BravoMultipais.LogSanitizer do
   @moduledoc """
-  Utilidades para enmascarar PII en logs (documentos, etc).
+  Utilidades para sanear datos sensibles antes de loguearlos.
+
+  Por ahora sólo enmascaramos documentos (DNI, NIF, CF, etc.).
   """
 
-  # ── Documentos ───────────────────────────────────────────────
+  @type document_input :: nil | String.t() | map()
+  @type document_output :: nil | String.t() | map()
 
-  # Sin documento
+  @spec mask_document(document_input) :: document_output
   def mask_document(nil), do: nil
 
-  # Documento como string plano, ej. "12345678Z"
+  # Caso: string plano "12345678Z"
   def mask_document(doc) when is_binary(doc) do
-    size = String.length(doc)
+    mask_binary(doc)
+  end
 
-    cond do
-      size <= 4 ->
-        String.duplicate("*", size)
+  # Caso: mapa con claves de documento (dni, nif, codice_fiscale, raw)
+  def mask_document(%{} = doc) do
+    key =
+      Enum.find(["dni", "nif", "codice_fiscale", "raw"], fn k ->
+        Map.has_key?(doc, k) or Map.has_key?(doc, String.to_atom(k))
+      end)
 
-      true ->
-        # ocultamos todo menos los últimos 4 caracteres
-        {prefix, suffix} = String.split_at(doc, size - 4)
-        String.duplicate("*", String.length(prefix)) <> suffix
+    case key do
+      nil ->
+        doc
+
+      k ->
+        value =
+          Map.get(doc, k) ||
+            Map.get(doc, String.to_atom(k))
+
+        masked = mask_binary(value || "")
+
+        doc
+        |> put_if_present(k, masked)
+        |> put_if_present(String.to_atom(k), masked)
     end
   end
 
-  # Documento como mapa (ej: %{"dni" => "12345678Z", "raw" => "12345678Z"})
-  def mask_document(%{} = doc) do
-    doc
-    |> Enum.into(%{}, fn {k, v} ->
-      cond do
-        is_binary(v) ->
-          {k, mask_document(v)}
+  # Cualquier otra cosa, la devolvemos tal cual
+  def mask_document(other), do: other
 
-        is_map(v) ->
-          # por si anidas otro map dentro
-          {k, mask_document(v)}
+  # ── Helpers internos ─────────────────────────
 
-        true ->
-          {k, v}
-      end
-    end)
+  defp mask_binary(bin) when is_binary(bin) do
+    len = String.length(bin)
+
+    if len <= 4 do
+      String.duplicate("*", len)
+    else
+      # dejamos los últimos 4 caracteres visibles
+      {prefix, suffix} = String.split_at(bin, len - 4)
+      String.duplicate("*", String.length(prefix)) <> suffix
+    end
   end
 
-  # Cualquier otra cosa rara: la devolvemos tal cual para no romper
-  def mask_document(other), do: other
+  defp put_if_present(map, key, nil), do: map
+  defp put_if_present(map, key, value), do: Map.put(map, key, value)
 end

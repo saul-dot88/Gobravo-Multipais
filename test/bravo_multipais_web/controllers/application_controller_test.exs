@@ -1,4 +1,6 @@
 defmodule BravoMultipaisWeb.ApplicationControllerTest do
+  @moduledoc false
+
   use BravoMultipaisWeb.ConnCase, async: true
 
   alias BravoMultipais.CreditApplications
