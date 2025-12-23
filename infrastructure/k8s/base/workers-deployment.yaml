@@ -1,0 +1,41 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bravo-multipais-workers
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bravo-multipais
+      component: worker
+  template:
+    metadata:
+      labels:
+        app: bravo-multipais
+        component: worker
+    spec:
+      containers:
+        - name: bravo-multipais-workers
+          image: tu-registry/bravo_multipais:0.1.0
+          imagePullPolicy: IfNotPresent
+
+          # OJO: aquí NO seteamos PHX_SERVER
+          envFrom:
+            - configMapRef:
+                name: bravo-multipais-config
+            - secretRef:
+                name: bravo-multipais-secrets
+
+          # Opcional: si quisieras marcar explícitamente que esto es entorno de workers:
+          # env:
+          #   - name: BRAVO_ROLE
+          #     value: "workers"
+
+          # No necesita puertos expuestos: no sirve tráfico HTTP, sólo jobs.
+          resources:
+            requests:
+              cpu: "50m"
+              memory: "128Mi"
+            limits:
+              cpu: "300m"
+              memory: "256Mi"

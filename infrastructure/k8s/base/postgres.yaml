@@ -1,0 +1,59 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: bravo-postgres-pvc
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 5Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bravo-postgres
+  labels:
+    app: bravo-postgres
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: bravo-postgres
+  template:
+    metadata:
+      labels:
+        app: bravo-postgres
+    spec:
+      containers:
+        - name: postgres
+          image: postgres:16
+          env:
+            - name: POSTGRES_DB
+              value: "bravo_multipais_prod"
+            - name: POSTGRES_USER
+              value: "bravo_user"
+            - name: POSTGRES_PASSWORD
+              value: "supersecret"
+          ports:
+            - containerPort: 5432
+          volumeMounts:
+            - mountPath: /var/lib/postgresql/data
+              name: data
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: bravo-postgres-pvc
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: bravo-postgres
+spec:
+  type: ClusterIP
+  selector:
+    app: bravo-postgres
+  ports:
+    - name: db
+      port: 5432
+      targetPort: 5432

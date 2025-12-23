@@ -1,0 +1,56 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: bravo-multipais-web
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: bravo-multipais
+      component: web
+  template:
+    metadata:
+      labels:
+        app: bravo-multipais
+        component: web
+    spec:
+      containers:
+        - name: bravo-multipais
+          image: tu-registry/bravo_multipais:0.1.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 4000
+
+          # Aquí sí levantamos Phoenix
+          env:
+            - name: PHX_SERVER
+              value: "true"
+          envFrom:
+            - configMapRef:
+                name: bravo-multipais-config
+            - secretRef:
+                name: bravo-multipais-secrets
+
+          readinessProbe:
+            httpGet:
+              path: /
+              port: http
+            initialDelaySeconds: 15
+            periodSeconds: 10
+
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 20
+
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "256Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
