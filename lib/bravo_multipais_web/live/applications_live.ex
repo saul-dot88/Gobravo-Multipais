@@ -47,7 +47,8 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
         selected_app: nil,
         show_raw_json: false,
         error_message: nil,
-        success_message: nil
+        success_message: nil,
+        webhook_events: %{}
       )
 
     # Suscripción a PubSub para auto-refresh
@@ -411,7 +412,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 <% end %>
               </select>
             </div>
-            
+
     <!-- Nombre completo -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -426,7 +427,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-            
+
     <!-- Documento -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -441,7 +442,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-            
+
     <!-- Monto e ingreso -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -488,7 +489,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
           </form>
         </div>
       </div>
-      
+
     <!-- Panel de lista + detalle -->
       <div class="lg:col-span-3">
         <div class="bg-white shadow rounded-2xl p-6 space-y-6">
@@ -502,7 +503,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
               </p>
             </div>
-            
+
     <!-- Filtros -->
             <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
               <!-- País -->
@@ -520,7 +521,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   <% end %>
                 </select>
               </div>
-              
+
     <!-- Estado -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -536,7 +537,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   <% end %>
                 </select>
               </div>
-              
+
     <!-- Sólo evaluadas -->
               <div class="flex items-center mt-2 sm:mt-0">
                 <input
@@ -550,7 +551,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   Sólo con riesgo evaluado
                 </span>
               </div>
-              
+
     <!-- Rango de monto -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -579,7 +580,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   class="block w-28 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
                 />
               </div>
-              
+
     <!-- Rango de fechas -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -606,7 +607,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </div>
             </form>
           </div>
-          
+
     <!-- Tabla -->
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
@@ -646,34 +647,34 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       <td class="py-2 px-3">
                         {country_badge(app.country)}
                       </td>
-                      
+
     <!-- Nombre -->
                       <td class="py-2 px-3 text-slate-800">
                         {app.full_name}
                       </td>
-                      
+
     <!-- Monto -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.amount}
                       </td>
-                      
+
     <!-- Ingreso mensual -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.monthly_income}
                       </td>
-                      
+
     <!-- Estado -->
                       <td class="py-2 px-3 text-center">
                         {status_badge(app.status)}
                       </td>
-                      
+
     <!-- Score: sólo backoffice ve el chip -->
                       <%= if backoffice?(@current_scope) do %>
                         <td class="py-2 px-3 text-center">
                           {risk_score_chip(app.risk_score)}
                         </td>
                       <% end %>
-                      
+
     <!-- Fecha creación -->
                       <td class="py-2 px-3 text-right text-xs text-slate-500">
                         {Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M")}
@@ -684,7 +685,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </tbody>
             </table>
           </div>
-          
+
     <!-- Panel de detalle -->
           <div class="mt-4">
             <%= if @selected_app do %>
@@ -750,7 +751,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                         </span>
                       </p>
                     </div>
-                    
+
     <!-- Columna 2 -->
                     <div class="space-y-2">
                       <p>
@@ -782,7 +783,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                         </button>
                       </p>
                     </div>
-                    
+
     <!-- Columna 3: info bancaria + timeline + acciones -->
                     <div class="space-y-4">
                       <%= if backoffice?(@current_scope) do %>
@@ -859,7 +860,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                             Sin información bancaria disponible.
                           </p>
                         <% end %>
-                        
+
     <!-- Acciones de integración -->
                         <div class="flex flex-wrap gap-2">
                           <% disabled = is_nil(@selected_app.risk_score) %>
@@ -907,45 +908,28 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   # Helpers de datos/roles
   # ─────────────────────────────────────────────
 
-  @impl true
-  def handle_info(%{event: "webhook_sent", payload: %{id: id, at: at}}, socket) do
-    webhook_events = Map.put(socket.assigns[:webhook_events] || %{}, id, at)
-
-    {:noreply, assign(socket, :webhook_events, webhook_events)}
-  end
-
+    # Evento de webhook reenviado (viene del WebhookNotifier)
   @impl true
   def handle_info(
         %Phoenix.Socket.Broadcast{
-          topic: "applications",
+          topic: @topic,
           event: "webhook_resent",
-          payload: %{application_id: application_id}
+          payload: %{application_id: application_id, at: at}
         },
         socket
       ) do
-    # Sólo agregamos el evento si la app seleccionada en el panel derecho
-    # coincide con la de la notificación
-    socket =
-      case socket.assigns.selected_application do
-        %{id: ^application_id} ->
-          now = NaiveDateTime.utc_now()
-
-          update(socket, :timeline, fn timeline ->
-            [
-              %{
-                type: :webhook_resent,
-                at: now,
-                message: "Webhook reenviado exitosamente"
-              }
-              | timeline
-            ]
-          end)
-
-        _ ->
-          socket
+    at_naive =
+      case at do
+        %NaiveDateTime{} = n -> n
+        %DateTime{} = dt -> DateTime.to_naive(dt)
+        _ -> NaiveDateTime.utc_now()
       end
 
-    {:noreply, socket}
+    webhook_events =
+      (socket.assigns[:webhook_events] || %{})
+      |> Map.put(application_id, at_naive)
+
+    {:noreply, assign(socket, :webhook_events, webhook_events)}
   end
 
   defp empty_form do
