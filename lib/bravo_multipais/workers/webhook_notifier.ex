@@ -100,6 +100,11 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
             at: DateTime.utc_now()
           })
 
+          Endpoint.broadcast(@topic, "webhook_resent", %{
+            application_id: app.id,
+            at: DateTime.utc_now()
+          })
+
           :ok
 
         status ->

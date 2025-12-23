@@ -44,6 +44,24 @@ defmodule BravoMultipais.Workers.WebhookNotifierTest do
     end
   end
 
+  test "enqueue/1 encola un job de webhook para la aplicación" do
+    # Creamos una aplicación mínima válida para insertar en DB
+    app =
+      %Application{
+        country: "ES",
+        full_name: "Test User",
+        document: %{"dni" => "12345678Z"},
+        amount: Decimal.new("1000.00"),
+        monthly_income: Decimal.new("2000.00"),
+        status: "APPROVED",
+        risk_score: 750
+      }
+      |> Repo.insert!()
+
+    # Sólo verificamos que el enqueue no truene y devuelva :ok
+    assert :ok = WebhookNotifier.enqueue(app.id)
+  end
+
   # --- helper privado para crear aplicaciones de prueba ---
 
   defp insert_application!(overrides \\ %{}) do
