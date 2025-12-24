@@ -69,7 +69,10 @@ defmodule BravoMultipais.MixProject do
       {:bandit, "~> 1.5"},
       {:finch, "~> 0.20.0"},
       {:oban, "~> 2.17"},
-      {:credo, "~> 1.7", only: [:dev, :test], runtime: false}
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:cachex, "~> 3.6"},
+      {:prom_ex, "~> 1.11"},
+      {:telemetry_metrics_prometheus_core, "~> 1.2"}
     ]
   end
 

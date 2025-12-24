@@ -3,14 +3,15 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   Worker Oban que simula la evaluación de riesgo de una solicitud de crédito,
   actualiza el `risk_score` y publica cambios en PubSub/Kafka interno.
   """
+
   use Oban.Worker,
     queue: :risk,
     max_attempts: 3
 
   alias BravoMultipais.CreditApplications.Application
-  alias BravoMultipais.Repo
-
+  alias BravoMultipais.BankCache
   alias BravoMultipais.LogSanitizer
+  alias BravoMultipais.Repo
   alias BravoMultipaisWeb.Endpoint
 
   require Logger
@@ -24,6 +25,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     * :ok
     * {:error, reason}
   """
+  @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
   def enqueue(application_id) when is_binary(application_id) do
     %{"application_id" => application_id}
     |> __MODULE__.new()
@@ -38,7 +40,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   def perform(%Oban.Job{args: %{"application_id" => id}}) do
     case Repo.get(Application, id) do
       nil ->
-        # Nada que hacer; puedes registrar log si quieres
+        # Si la solicitud ya no existe, consideramos el job consumido
         :ok
 
       %Application{} = app ->
@@ -61,16 +63,15 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
             })
 
             Logger.info("Risk evaluation completed",
-              application_id: app.id,
-              country: app.country,
-              risk_score: app.risk_score,
-              document_masked: LogSanitizer.mask_document(app.document)
+              application_id: updated_app.id,
+              country: updated_app.country,
+              risk_score: updated_app.risk_score,
+              document_masked: LogSanitizer.mask_document(updated_app.document)
             )
 
             :ok
 
           {:error, changeset} ->
-            # Oban marcará el job como error, reintento si aplica
             {:error, changeset}
         end
     end
@@ -80,7 +81,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   # Lógica "fake" de evaluación
   # ─────────────────────────────
 
-  defp evaluate(app) do
+  defp evaluate(%Application{} = app) do
     ratio =
       with %Decimal{} = amount <- app.amount,
            %Decimal{} = income <- app.monthly_income,
@@ -105,38 +106,8 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
         "REJECTED"
       end
 
-    bank_profile = build_fake_bank_profile(app, base_score)
+    bank_profile = BankCache.fetch_profile(app)
 
     {base_score, status, bank_profile}
   end
-
-  defp build_fake_bank_profile(app, score) do
-    amount = app.amount || Decimal.new(0)
-    income = app.monthly_income || Decimal.new(0)
-
-    total_debt =
-      amount
-      |> Decimal.mult(Decimal.new("0.8"))
-      |> Decimal.to_float()
-
-    avg_balance =
-      income
-      |> Decimal.mult(Decimal.new("3.5"))
-      |> Decimal.to_float()
-
-    %{
-      country: app.country,
-      currency: "EUR",
-      score: score,
-      total_debt: total_debt,
-      avg_balance: avg_balance,
-      external_id: "BANK-#{mask_doc(app.document)}"
-    }
-  end
-
-  defp mask_doc(%{"dni" => dni}) when is_binary(dni), do: dni
-  defp mask_doc(%{"codice_fiscale" => cf}) when is_binary(cf), do: cf
-  defp mask_doc(%{"nif" => nif}) when is_binary(nif), do: nif
-  defp mask_doc(%{"raw" => raw}) when is_binary(raw), do: raw
-  defp mask_doc(_), do: "UNKNOWN"
 end

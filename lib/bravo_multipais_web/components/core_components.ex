@@ -29,7 +29,8 @@ defmodule BravoMultipaisWeb.CoreComponents do
   use Phoenix.Component
   use Gettext, backend: BravoMultipaisWeb.Gettext
 
-  alias HTML.Form
+  alias Phoenix.HTML.Form
+  alias Phoenix.HTML.FormField
   alias Phoenix.LiveView.JS
 
   @doc """
@@ -153,7 +154,7 @@ defmodule BravoMultipaisWeb.CoreComponents do
     values: ~w(checkbox color date datetime-local email file month number password
                search select tel text textarea time url week)
 
-  attr :field, HTML.FormField,
+  attr :field, FormField,
     doc: "a form field struct retrieved from the form, for example: @form[:email]"
 
   attr :errors, :list, default: []
@@ -168,7 +169,7 @@ defmodule BravoMultipaisWeb.CoreComponents do
     include: ~w(accept autocomplete capture cols disabled form list max maxlength min minlength
                 multiple pattern placeholder readonly required rows size step)
 
-  def input(%{field: %HTML.FormField{} = field} = assigns) do
+  def input(%{field: %FormField{} = field} = assigns) do
     errors = if Phoenix.Component.used_input?(field), do: field.errors, else: []
 
     assigns

@@ -12,7 +12,8 @@ defmodule BravoMultipaisWeb.UserAuth do
   alias BravoMultipais.Accounts.Scope
   alias BravoMultipais.Accounts.User
   alias BravoMultipaisWeb.Router.Helpers, as: Routes
-  alias LiveView
+  alias Phoenix.LiveView
+  alias Phoenix.LiveView.Socket
 
   # Make the remember me cookie valid for 14 days. This should match
   # the session validity setting in UserToken.

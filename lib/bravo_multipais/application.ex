@@ -16,7 +16,9 @@ defmodule BravoMultipais.Application do
       # Start a worker by calling: BravoMultipais.Worker.start_link(arg)
       # {BravoMultipais.Worker, arg},
       # Start to serve requests, typically the last entry
-      BravoMultipaisWeb.Endpoint
+      BravoMultipaisWeb.Endpoint,
+      {Cachex, name: :bank_profile_cache},
+      BravoMultipais.PromEx
     ]
 
     # See https://hexdocs.pm/elixir/Supervisor.html

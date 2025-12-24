@@ -45,6 +45,13 @@ defmodule BravoMultipaisWeb.Router do
     live "/", ApplicationsLive, :index
   end
 
+  scope "/" do
+    pipe_through :api_public
+
+    forward "/metrics", PromEx.Plug,
+      prom_ex_module: BravoMultipais.PromEx
+  end
+
   scope "/api", BravoMultipaisWeb do
     pipe_through :api_public
 

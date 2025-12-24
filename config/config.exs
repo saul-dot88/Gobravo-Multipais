@@ -70,6 +70,17 @@ config :esbuild,
     env: %{"NODE_PATH" => [Path.expand("../deps", __DIR__), Mix.Project.build_path()]}
   ]
 
+config :bravo_multipais, BravoMultipais.PromEx,
+  manual_metrics_start_delay: :no_delay,
+  drop_metrics_groups: [],
+  grafana: [
+    host: System.get_env("GRAFANA_HOST", "http://localhost:3000"),
+    auth_token: System.get_env("GRAFANA_TOKEN", ""),
+    upload_dashboards_on_start: false,
+    folder_name: "BravoMultipais",
+    annotate_app_lifecycle: false
+  ]
+
 # Configure tailwind (the version is required)
 config :tailwind,
   version: "4.1.7",
