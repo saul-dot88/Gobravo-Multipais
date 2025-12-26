@@ -6,10 +6,12 @@ defmodule BravoMultipais.CreditApplications.Application do
   `risk_score` y perfil bancario, y sirve de base para el flujo
   de evaluación de riesgo y notificación de webhooks.
   """
+
   use Ecto.Schema
   import Ecto.Changeset
 
   @primary_key {:id, :binary_id, autogenerate: true}
+
   @derive {Jason.Encoder,
            only: [
              :id,
@@ -46,6 +48,23 @@ defmodule BravoMultipais.CreditApplications.Application do
     timestamps()
   end
 
+  # ─────────────────────────────
+  # Estados válidos
+  # ─────────────────────────────
+
+  @statuses ~w(
+    PENDING_RISK
+    APPROVED
+    REJECTED
+    UNDER_REVIEW
+  )
+
+  def statuses, do: @statuses
+
+  # ─────────────────────────────
+  # Changeset general (crear/actualizar)
+  # ─────────────────────────────
+
   @doc false
   def changeset(%__MODULE__{} = app, attrs) do
     app
@@ -68,15 +87,27 @@ defmodule BravoMultipais.CreditApplications.Application do
       :monthly_income,
       :status
     ])
+    |> validate_inclusion(:status, @statuses)
   end
 
+  # ─────────────────────────────
+  # Changeset de estado (para worker de riesgo)
+  # ─────────────────────────────
+
   @doc """
-  Changeset para actualizar solo el estado (lo usaremos después para transiciones).
+  Changeset para actualizar solo el estado de la solicitud.
+
+  Úsalo desde el worker de riesgo, por ejemplo:
+
+      app
+      |> Application.status_changeset("APPROVED")
+      |> change(risk_score: 760)
+      |> Repo.update()
   """
-  def status_changeset(%__MODULE__{} = app, new_status) do
+  def status_changeset(%__MODULE__{} = app, new_status) when is_binary(new_status) do
     app
-    |> change()
-    |> put_change(:status, new_status)
+    |> cast(%{status: new_status}, [:status])
+    |> validate_required([:status])
     |> validate_inclusion(:status, @statuses)
   end
 end
