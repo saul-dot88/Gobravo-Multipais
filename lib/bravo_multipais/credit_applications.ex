@@ -1,10 +1,13 @@
 defmodule BravoMultipais.CreditApplications do
   @moduledoc """
   Contexto público para el módulo de solicitudes de crédito.
-  ...
+
+  - Lecturas con filtros y paginación (`list_applications/2`).
+  - Proyección pública de `Application` (`to_public/1`).
+  - Comandos de creación (`create_application/1`) delegando a `Commands`.
   """
 
-  import Ecto.Query, only: [from: 2]
+  import Ecto.Query, only: [from: 2, offset: 2, limit: 2]
 
   alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
   alias BravoMultipais.Repo
@@ -20,6 +23,14 @@ defmodule BravoMultipais.CreditApplications do
           optional(:only_evaluated) => boolean()
         }
 
+  @type page_result :: %{
+          entries: [map()],
+          total: non_neg_integer(),
+          page: pos_integer(),
+          per_page: pos_integer(),
+          total_pages: pos_integer()
+        }
+
   # Campos que SÍ queremos exponer de bank_profile
   @allowed_bank_profile_fields ~w(external_id total_debt avg_balance currency)
 
@@ -28,26 +39,81 @@ defmodule BravoMultipais.CreditApplications do
   # ─────────────────────────────────────────────────────────────
 
   @doc """
-  Lista solicitudes aplicando filtros opcionales.
+  Lista solicitudes aplicando filtros opcionales **sin paginación explícita**.
 
-  Esta versión se usa desde el LiveView (backoffice) y devuelve
-  la versión **pública/sanitizada** de cada Application.
+  Devuelve sólo la lista de aplicaciones en formato público.
+  Internamente usa la versión paginada con `page: 1` y `per_page: 50`.
   """
   @spec list_applications(filters()) :: [map()]
   def list_applications(filters \\ %{}) do
+    list_applications(filters, page: 1, per_page: 50).entries
+  end
+
+  @doc """
+  Lista solicitudes con filtros + paginación.
+
+  Devuelve un mapa con:
+
+    * `:entries`      → lista de aplicaciones en formato público
+    * `:total`        → total de registros que cumplen los filtros
+    * `:page`         → página actual (1-based)
+    * `:per_page`     → tamaño de página
+    * `:total_pages`  → número total de páginas
+  """
+  @spec list_applications(filters(), keyword()) :: %{
+          entries: [map()],
+          page: pos_integer(),
+          per_page: pos_integer(),
+          total: non_neg_integer(),
+          total_pages: pos_integer()
+        }
+  def list_applications(filters, opts) when is_list(opts) do
+    page = Keyword.get(opts, :page, 1)
+    per_page = Keyword.get(opts, :per_page, 20)
+
     base =
       from a in Application,
         order_by: [desc: a.inserted_at]
 
-    base
-    |> maybe_filter_country(filters[:country])
-    |> maybe_filter_status(filters[:status])
-    |> maybe_filter_amount_range(filters[:min_amount], filters[:max_amount])
-    |> maybe_filter_date_range(filters[:from_date], filters[:to_date])
-    |> maybe_filter_only_evaluated(filters[:only_evaluated])
-    |> Repo.all()
-    |> Enum.map(&to_public/1)
+    query =
+      base
+      |> maybe_filter_country(filters[:country])
+      |> maybe_filter_status(filters[:status])
+      |> maybe_filter_amount_range(filters[:min_amount], filters[:max_amount])
+      |> maybe_filter_date_range(filters[:from_date], filters[:to_date])
+      |> maybe_filter_only_evaluated(filters[:only_evaluated])
+
+    total = Repo.aggregate(query, :count, :id)
+
+    entries =
+      query
+      |> limit(^per_page)
+      |> offset(^(per_page * max(page - 1, 0)))
+      |> Repo.all()
+      |> Enum.map(&to_public/1)
+
+    total_pages =
+      cond do
+        total == 0 ->
+          1
+
+        per_page <= 0 ->
+          1
+
+        true ->
+          Integer.floor_div(total + per_page - 1, per_page)
+      end
+
+    %{
+      entries: entries,
+      page: page,
+      per_page: per_page,
+      total: total,
+      total_pages: total_pages
+    }
   end
+
+  # ── Filtros de query ─────────────────────────────
 
   defp maybe_filter_country(query, nil), do: query
 
@@ -63,6 +129,12 @@ defmodule BravoMultipais.CreditApplications do
 
   defp maybe_filter_amount_range(query, nil, nil), do: query
 
+  defp maybe_filter_amount_range(query, "" = _min, max),
+    do: maybe_filter_amount_range(query, nil, max)
+
+  defp maybe_filter_amount_range(query, min, "" = _max),
+    do: maybe_filter_amount_range(query, min, nil)
+
   defp maybe_filter_amount_range(query, min, nil) do
     from a in query, where: a.amount >= ^min
   end
@@ -76,6 +148,12 @@ defmodule BravoMultipais.CreditApplications do
   end
 
   defp maybe_filter_date_range(query, nil, nil), do: query
+
+  defp maybe_filter_date_range(query, "" = _from, to_date),
+    do: maybe_filter_date_range(query, nil, to_date)
+
+  defp maybe_filter_date_range(query, from_date, "" = _to),
+    do: maybe_filter_date_range(query, from_date, nil)
 
   defp maybe_filter_date_range(query, from_date, nil) do
     {:ok, from} = NaiveDateTime.from_iso8601("#{from_date} 00:00:00")
@@ -105,11 +183,13 @@ defmodule BravoMultipais.CreditApplications do
 
   defp maybe_filter_only_evaluated(query, _), do: query
 
+  # ── API pública delegada a Queries ──────────────────────────
+
   @doc """
   Versión pública de `list_applications/1` para API, delegada a `Queries`.
 
-  Aquí asumimos que `Queries` ya hace la proyección adecuada para la API
-  externa (puede usar `to_public/1` por dentro).
+  Aquí asumimos que `Queries` ya hace la proyección adecuada para la API externa
+  (puede usar `to_public/1` por dentro).
   """
   @spec list_applications_public(map()) :: [map()]
   def list_applications_public(params \\ %{}) do
@@ -203,17 +283,26 @@ defmodule BravoMultipais.CreditApplications do
     Map.put(base, :bank_profile, sanitize_bank_profile(app.bank_profile))
   end
 
-  defp public_document(nil), do: nil
+ defp public_document(nil), do: nil
 
-  defp public_document(%{} = doc) do
-    cond do
-      Map.has_key?(doc, "nif") -> doc["nif"]
-      Map.has_key?(doc, :nif) -> doc[:nif]
-      Map.has_key?(doc, "codice_fiscale") -> doc["codice_fiscale"]
-      Map.has_key?(doc, :codice_fiscale) -> doc[:codice_fiscale]
-      true -> nil
-    end
+defp public_document(%{} = doc) do
+  cond do
+    # ES
+    Map.has_key?(doc, "dni") -> doc["dni"]
+    Map.has_key?(doc, :dni) -> doc[:dni]
+    Map.has_key?(doc, "nif") -> doc["nif"]
+    Map.has_key?(doc, :nif) -> doc[:nif]
+    Map.has_key?(doc, "nie") -> doc["nie"]
+    Map.has_key?(doc, :nie) -> doc[:nie]
+
+    # IT
+    Map.has_key?(doc, "codice_fiscale") -> doc["codice_fiscale"]
+    Map.has_key?(doc, :codice_fiscale) -> doc[:codice_fiscale]
+
+    # fallback
+    true -> nil
   end
+end
 
   defp normalize_string_keys(map) do
     map

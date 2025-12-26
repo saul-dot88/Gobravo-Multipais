@@ -17,7 +17,7 @@ defmodule BravoMultipais.CreditApplications.Commands do
   alias BravoMultipais.Bank.Normalizer
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Policies
-    alias BravoMultipais.Workers.EvaluateRisk, as: EvaluateRiskWorker
+  alias BravoMultipais.Workers.EvaluateRisk, as: EvaluateRiskWorker
 
   @typedoc "Parámetros crudos que vienen del formulario LiveView o de la API"
   @type params :: map()
@@ -143,26 +143,26 @@ defmodule BravoMultipais.CreditApplications.Commands do
   @spec persist_and_enqueue(map(), map(), module()) ::
           {:ok, Application.t()} | {:error, error_reason}
   defp persist_and_enqueue(attrs, bank_profile, policy_module) do
-  initial_status = policy_module.next_status_on_creation(attrs, bank_profile)
+    initial_status = policy_module.next_status_on_creation(attrs, bank_profile)
 
-  changes =
-    attrs
-    |> Map.take([:country, :full_name, :document, :amount, :monthly_income])
-    |> Map.put(:status, initial_status)
-    |> Map.put(:bank_profile, bank_profile)
+    changes =
+      attrs
+      |> Map.take([:country, :full_name, :document, :amount, :monthly_income])
+      |> Map.put(:status, initial_status)
+      |> Map.put(:bank_profile, bank_profile)
 
-  %Application{}
-  |> Application.changeset(changes)
-  |> Repo.insert()
-  |> case do
-    {:ok, app} ->
-      case EvaluateRiskWorker.enqueue(app.id) do
-        :ok -> {:ok, app}
-        {:error, reason} -> {:error, {:job_enqueue_failed, reason}}
-      end
+    %Application{}
+    |> Application.changeset(changes)
+    |> Repo.insert()
+    |> case do
+      {:ok, app} ->
+        case EvaluateRiskWorker.enqueue(app.id) do
+          :ok -> {:ok, app}
+          {:error, reason} -> {:error, {:job_enqueue_failed, reason}}
+        end
 
-    {:error, changeset} ->
-      {:error, {:invalid_changeset, changeset}}
+      {:error, changeset} ->
+        {:error, {:invalid_changeset, changeset}}
+    end
   end
-end
 end

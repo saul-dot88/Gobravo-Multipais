@@ -107,7 +107,13 @@ config :logger, :default_formatter,
     :url,
     :reason,
     :response,
-    :event
+    :event,
+    :new_status,
+    :current_status,
+    :result,
+    :errors,
+    :current_score,
+    :new_score
   ]
 
 # Use Jason for JSON parsing in Phoenix

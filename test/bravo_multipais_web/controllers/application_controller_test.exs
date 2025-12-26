@@ -53,7 +53,7 @@ defmodule BravoMultipaisWeb.ApplicationControllerTest do
 
     assert resp["country"] == "ES"
     assert resp["full_name"] == "Juan Pérez"
-    assert resp["document"] == %{"dni" => "12345678Z"}
+    assert resp["document"] == "12345678Z"
     assert resp["amount"] == "5000"
     assert resp["monthly_income"] == "2000"
     assert resp["status"] == "PENDING_RISK"
@@ -126,18 +126,19 @@ defmodule BravoMultipaisWeb.ApplicationControllerTest do
 
     conn = get(conn, ~p"/api/applications/#{app.id}")
 
-    assert %{"data" => resp} = json_response(conn, 200)
-    assert is_map(resp["document"])
-    assert resp["document"]["raw"] == "12345678Z"
-    assert resp["document"]["dni"] == "12345678Z"
+    resp = json_response(conn, 200)
+
+assert resp["id"] == app.id
+assert resp["country"] == app.country
+
+# ahora el documento público es un string
+assert is_binary(resp["document"])
+assert resp["document"] == "12345678Z"
   end
 
-  test "GET /api/applications/:id show/2 returns 404 when not found",
-       %{conn: conn} do
-    unknown_id = Ecto.UUID.generate()
+  test "GET /api/applications/:id show/2 returns 404 when not found", %{conn: conn} do
+  conn = get(conn, ~p"/api/applications/#{Ecto.UUID.generate()}")
 
-    conn = get(conn, ~p"/api/applications/#{unknown_id}")
-
-    assert %{"error" => "not_found"} = json_response(conn, 404)
-  end
+  assert %{"error" => "application_not_found"} = json_response(conn, 404)
+end
 end

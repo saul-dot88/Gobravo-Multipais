@@ -15,16 +15,17 @@ defmodule BravoMultipaisWeb.ApplicationController do
 
   # GET /api/applications/:id
   def show(conn, %{"id" => id}) do
-    case CreditApplications.get_application_public(id) do
-      nil ->
-        conn
-        |> put_status(:not_found)
-        |> json(%{error: "not_found", resource: "application", id: id})
+  case BravoMultipais.CreditApplications.get_application_public(id) do
+    nil ->
+      conn
+      |> put_status(:not_found)
+      |> json(%{"error" => "application_not_found"})
 
-      app_public ->
-        json(conn, %{data: app_public})
-    end
+    public_app ->
+      # JSON plano, con "id", "country", "document" (string), etc.
+      json(conn, public_app)
   end
+end
 
   # POST /api/applications
   def create(conn, params) do

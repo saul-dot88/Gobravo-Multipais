@@ -4,12 +4,35 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   on_mount {BravoMultipaisWeb.UserAuth, :require_backoffice}
 
   alias BravoMultipais.CreditApplications
-  alias BravoMultipais.CreditApplications.{Application, Commands, Queries}
+  alias BravoMultipais.CreditApplications.{Application, Queries}
   alias BravoMultipais.Workers.{EvaluateRisk, WebhookNotifier}
   alias BravoMultipaisWeb.Endpoint
-  alias Phoenix.PubSub
 
   @topic "applications"
+  @default_per_page 20
+
+  @risk_copy %{
+    "ES" => %{
+      "APPROVED" => "perfil sano ES – endeudamiento y ratios dentro de lo esperado",
+      "UNDER_REVIEW" => "caso borderline ES – requiere revisión manual por ratios al límite",
+      "REJECTED" => "riesgo alto ES – fuera de los parámetros de la política"
+    },
+    "IT" => %{
+      "APPROVED" => "profilo sano IT – carga de deuda razonable para el ingreso",
+      "UNDER_REVIEW" => "caso borderline IT – conviene mirar el expediente con detalle",
+      "REJECTED" => "rischio alto IT – no cumple con la política interna"
+    },
+    "PT" => %{
+      "APPROVED" => "perfil saudável PT – score externo y dívida em níveis confortáveis",
+      "UNDER_REVIEW" => "caso para revisão PT – indicadores de risco no limite",
+      "REJECTED" => "risco elevado PT – fora da política de concessão"
+    },
+    "DEFAULT" => %{
+      "APPROVED" => "perfil sano – dentro de política",
+      "UNDER_REVIEW" => "caso borderline – revisar manualmente",
+      "REJECTED" => "riesgo alto – fuera de política"
+    }
+  }
 
   # ─────────────────────────────────────────────
   # mount
@@ -19,13 +42,16 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   def mount(_params, _session, socket) do
     scope = socket.assigns.current_scope
     filters = %{}
-    apps = CreditApplications.list_applications(filters)
+    page = 1
+    per_page = @default_per_page
+
+    page_data = CreditApplications.list_applications(filters, page: page, per_page: per_page)
 
     socket =
       socket
       |> assign(
-        applications: apps,
-        stats: build_stats(apps),
+        applications: page_data.entries,
+        stats: build_stats(page_data.entries),
         form: %{
           "country" => "ES",
           "full_name" => "",
@@ -48,10 +74,13 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
         show_raw_json: false,
         error_message: nil,
         success_message: nil,
-        webhook_events: %{}
+        webhook_events: %{},
+        page: page_data.page,
+        per_page: page_data.per_page,
+        total_pages: page_data.total_pages,
+        total_entries: page_data.total
       )
 
-    # Suscripción a PubSub para auto-refresh
     socket =
       if connected?(socket) do
         Endpoint.subscribe(@topic)
@@ -71,19 +100,29 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   def handle_event("create_application", params, socket) do
     attrs = build_attrs_from_params(params)
 
-    case Commands.create_application(attrs) do
+    case CreditApplications.create_application(attrs) do
       {:ok, app} ->
-        # Después de crear, volvemos a cargar la lista (sin filtros por ahora)
-        apps = CreditApplications.list_applications(%{})
+        # recargamos con filtros actuales pero enviando a página 1
+        filters = current_filters(socket.assigns)
+
+        page_data =
+          CreditApplications.list_applications(filters,
+            page: 1,
+            per_page: socket.assigns.per_page || @default_per_page
+          )
 
         socket =
           socket
           |> put_flash(:info, "Application created (#{app.country} - #{app.status})")
-          |> assign(:applications, apps)
-          |> assign(:stats, build_stats(apps))
+          |> assign(:applications, page_data.entries)
+          |> assign(:stats, build_stats(page_data.entries))
           |> assign(:form, empty_form())
           |> assign(:error_message, nil)
           |> assign(:success_message, "Solicitud creada correctamente.")
+          |> assign(:page, page_data.page)
+          |> assign(:per_page, page_data.per_page)
+          |> assign(:total_pages, page_data.total_pages)
+          |> assign(:total_entries, page_data.total)
           |> schedule_clear_messages()
 
         {:noreply, socket}
@@ -140,13 +179,10 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   def handle_event("filter", params, socket) do
     country = blank_to_nil(params["country"])
     status = blank_to_nil(params["status"])
-
     min_amount = blank_to_nil(params["min_amount"])
     max_amount = blank_to_nil(params["max_amount"])
     from_date = blank_to_nil(params["from_date"])
     to_date = blank_to_nil(params["to_date"])
-
-    # checkbox → sólo viene cuando está marcado
     only_evaluated = Map.has_key?(params, "only_evaluated")
 
     filters = %{
@@ -159,13 +195,17 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       only_evaluated: only_evaluated
     }
 
-    apps = CreditApplications.list_applications(filters)
+    page_data =
+      CreditApplications.list_applications(filters,
+        page: 1,
+        per_page: socket.assigns.per_page || @default_per_page
+      )
 
     socket =
       socket
       |> assign(
-        applications: apps,
-        stats: build_stats(apps),
+        applications: page_data.entries,
+        stats: build_stats(page_data.entries),
         filter_country: country,
         filter_status: status,
         filter_min_amount: min_amount,
@@ -174,10 +214,37 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
         filter_to_date: to_date,
         only_evaluated: only_evaluated,
         selected_application_id: nil,
-        selected_app: nil
+        selected_app: nil,
+        page: page_data.page,
+        per_page: page_data.per_page,
+        total_pages: page_data.total_pages,
+        total_entries: page_data.total
       )
 
     {:noreply, socket}
+  end
+
+  @impl true
+  def handle_event("change_page", %{"page" => page_str}, socket) do
+    page =
+      case Integer.parse(page_str) do
+        {p, _} when p >= 1 -> p
+        _ -> 1
+      end
+
+    per_page = socket.assigns.per_page || @default_per_page
+    filters = current_filters(socket.assigns)
+
+    page_data = CreditApplications.list_applications(filters, page: page, per_page: per_page)
+
+    {:noreply,
+     socket
+     |> assign(:applications, page_data.entries)
+     |> assign(:stats, build_stats(page_data.entries))
+     |> assign(:page, page_data.page)
+     |> assign(:per_page, page_data.per_page)
+     |> assign(:total_pages, page_data.total_pages)
+     |> assign(:total_entries, page_data.total)}
   end
 
   defp blank_to_nil(""), do: nil
@@ -372,10 +439,12 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       <.stat_card label="Rechazadas" value={@stats.rejected} />
     </div>
 
-    <!-- Layout principal: más espacio para la columna derecha -->
-    <div class="grid grid-cols-1 lg:grid-cols-4 gap-8">
+    <!-- Layout principal:
+         - Mobile: 1 columna (stack)
+         - Desktop: 2 columnas, derecha bastante más ancha -->
+    <div class="grid grid-cols-1 lg:grid-cols-[minmax(0,0.9fr)_minmax(0,2.3fr)] gap-8 items-start">
       <!-- Panel de creación -->
-      <div class="lg:col-span-1">
+      <div>
         <div class="bg-white shadow rounded-2xl p-6 space-y-4">
           <h2 class="text-xl font-semibold text-slate-800 mb-2">
             Nueva solicitud
@@ -491,11 +560,11 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       </div>
       
     <!-- Panel de lista + detalle -->
-      <div class="lg:col-span-3">
+      <div>
         <div class="bg-white shadow rounded-2xl p-6 space-y-6">
           <!-- Cabecera + filtros -->
           <div class="flex flex-col gap-4 sm:flex-row sm:items-end sm:justify-between">
-            <div class="max-w-xs">
+            <div class="max-w-sm">
               <h2 class="text-xl font-semibold text-slate-800">
                 Solicitudes recientes
               </h2>
@@ -691,8 +760,18 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
             <%= if @selected_app do %>
               <div class="border border-slate-200 rounded-2xl p-6 bg-slate-50/80 shadow-sm">
                 <div class="flex flex-wrap items-start justify-between gap-4">
-                  <div class="flex items-start gap-3">
-                    {risk_level_badge(@selected_app.risk_score)}
+                  <div class="space-y-2">
+                    <!-- Badge de estado + resumen de riesgo -->
+                    <div class="flex flex-wrap items-center gap-2">
+                      {status_badge(@selected_app.status)}
+
+                      <span
+                        :if={@selected_app.risk_score}
+                        class="text-[11px] text-slate-600"
+                      >
+                        {risk_summary(@selected_app)}
+                      </span>
+                    </div>
 
                     <div class="space-y-1">
                       <h3 class="text-base font-semibold text-slate-900 leading-snug">
@@ -733,7 +812,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                     </pre>
                   </div>
                 <% else %>
-                  <div class="mt-6 grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6 text-sm leading-relaxed">
+                  <div class="mt-6 grid grid-cols-1 md:grid-cols-2 gap-6 text-sm leading-relaxed">
                     <!-- Columna 1 -->
                     <div class="space-y-2">
                       <p>
@@ -784,8 +863,9 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       </p>
                     </div>
                     
-    <!-- Columna 3: info bancaria + timeline + acciones -->
-                    <div class="space-y-4">
+    <!-- Columna 3: info bancaria + timeline + acciones
+                         (se apila debajo en 2 columnas gracias al grid md:grid-cols-2) -->
+                    <div class="md:col-span-2 lg:col-span-1 space-y-4">
                       <%= if backoffice?(@current_scope) do %>
                         <%= if @selected_app.bank_profile do %>
                           <% profile = @selected_app.bank_profile %>
@@ -823,7 +903,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                               Timeline (simulada)
                             </h4>
 
-                            <ol class="relative border-l border-slate-200 pl-4 space-y-3 text-xs">
+                            <ol class="relative border-l border-slate-200 pl-6 space-y-3 text-xs">
                               <%= for event <- build_timeline(@selected_app, @webhook_events) do %>
                                 <li class="relative">
                                   <span class={[
@@ -845,10 +925,10 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                                     end
                                   ]} />
 
-                                  <p class="text-[11px] text-slate-500">
+                                  <p class="ml-1 text-[11px] text-slate-500">
                                     {Calendar.strftime(event.at, "%Y-%m-%d %H:%M")}
                                   </p>
-                                  <p class="text-[12px] text-slate-800">
+                                  <p class="ml-1 text-[12px] text-slate-800">
                                     {event.label}
                                   </p>
                                 </li>
@@ -862,7 +942,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                         <% end %>
                         
     <!-- Acciones de integración -->
-                        <div class="flex flex-wrap gap-2">
+                        <div class="flex flex-wrap gap-2 pt-2">
                           <% disabled = is_nil(@selected_app.risk_score) %>
 
                           <button
@@ -908,6 +988,18 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   # Helpers de datos/roles
   # ─────────────────────────────────────────────
 
+  defp current_filters(assigns) do
+    %{
+      country: assigns[:filter_country],
+      status: assigns[:filter_status],
+      min_amount: assigns[:filter_min_amount],
+      max_amount: assigns[:filter_max_amount],
+      from_date: assigns[:filter_from_date],
+      to_date: assigns[:filter_to_date],
+      only_evaluated: assigns[:only_evaluated] || false
+    }
+  end
+
   # Evento de webhook reenviado (viene del WebhookNotifier)
   @impl true
   def handle_info(
@@ -930,6 +1022,58 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       |> Map.put(application_id, at_naive)
 
     {:noreply, assign(socket, :webhook_events, webhook_events)}
+  end
+
+  @impl true
+  def handle_info(
+        %Phoenix.Socket.Broadcast{
+          topic: @topic,
+          event: "status_changed",
+          payload: %{id: id, status: _status, risk_score: _risk_score}
+        },
+        socket
+      ) do
+    filters = current_filters(socket.assigns)
+
+    page_data =
+      CreditApplications.list_applications(filters,
+        page: socket.assigns.page || 1,
+        per_page: socket.assigns.per_page || @default_per_page
+      )
+
+    apps = page_data.entries
+
+    selected_app =
+      case socket.assigns.selected_app do
+        %Application{id: ^id} ->
+          Queries.get_application(id)
+
+        other ->
+          other
+      end
+
+    {:noreply,
+     socket
+     |> assign(:applications, apps)
+     |> assign(:stats, build_stats(apps))
+     |> assign(:selected_app, selected_app)
+     |> assign(:page, page_data.page)
+     |> assign(:per_page, page_data.per_page)
+     |> assign(:total_pages, page_data.total_pages)
+     |> assign(:total_entries, page_data.total)}
+  end
+
+  @impl true
+  def handle_info(:clear_messages, socket) do
+    {:noreply,
+     socket
+     |> assign(:success_message, nil)
+     |> assign(:error_message, nil)}
+  end
+
+  @impl true
+  def handle_info(_msg, socket) do
+    {:noreply, socket}
   end
 
   defp empty_form do
@@ -1221,57 +1365,22 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
     socket
   end
 
-  # ─────────────────────────────────────────────
-  # handle_info (PubSub + limpieza mensajes)
-  # ─────────────────────────────────────────────
+  defp status_badge_class("APPROVED"), do: "badge badge-success"
+  defp status_badge_class("UNDER_REVIEW"), do: "badge badge-warning"
+  defp status_badge_class("REJECTED"), do: "badge badge-error"
+  defp status_badge_class(_), do: "badge badge-ghost"
 
-  @impl true
-  def handle_info(
-        %Phoenix.Socket.Broadcast{
-          topic: @topic,
-          event: "status_changed",
-          payload: %{id: id, status: status, risk_score: risk_score}
-        },
-        socket
-      ) do
-    filters = %{
-      country: socket.assigns.filter_country,
-      status: socket.assigns.filter_status,
-      min_amount: socket.assigns.filter_min_amount,
-      max_amount: socket.assigns.filter_max_amount,
-      from_date: socket.assigns.filter_from_date,
-      to_date: socket.assigns.filter_to_date,
-      only_evaluated: socket.assigns.only_evaluated
-    }
+  defp risk_summary(%{country: country, status: status, risk_score: score})
+       when is_integer(score) and is_binary(country) and is_binary(status) do
+    country = String.upcase(country)
 
-    apps = CreditApplications.list_applications(filters)
+    base_copy =
+      @risk_copy
+      |> Map.get(country, @risk_copy["DEFAULT"])
+      |> Map.get(status, "riesgo calculado")
 
-    selected_app =
-      case socket.assigns.selected_app do
-        %Application{id: ^id} ->
-          Queries.get_application(id)
-
-        other ->
-          other
-      end
-
-    {:noreply,
-     socket
-     |> assign(:applications, apps)
-     |> assign(:stats, build_stats(apps))
-     |> assign(:selected_app, selected_app)}
+    "#{status} (score #{score} – #{base_copy})"
   end
 
-  @impl true
-  def handle_info(:clear_messages, socket) do
-    {:noreply,
-     socket
-     |> assign(:success_message, nil)
-     |> assign(:error_message, nil)}
-  end
-
-  @impl true
-  def handle_info(_msg, socket) do
-    {:noreply, socket}
-  end
+  defp risk_summary(_), do: "Sin evaluación de riesgo aún"
 end

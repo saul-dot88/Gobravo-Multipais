@@ -13,7 +13,9 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
     amount: Decimal.new("5000"),
     monthly_income: Decimal.new("2000"),
     status: "PENDING_RISK",
-    bank_profile: nil,
+    # en el flujo real viene del servicio externo; aquí sólo
+    # lo usamos para comprobar que el worker NO lo toca
+    bank_profile: %{"score" => 650, "country" => "ES"},
     risk_score: nil
   }
 
@@ -25,7 +27,7 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
     |> Repo.insert!()
   end
 
-  test "perform/1 actualiza risk_score, status y bank_profile" do
+  test "perform/1 actualiza risk_score y status, sin tocar bank_profile" do
     app = insert_pending_application()
     job = %Job{args: %{"application_id" => app.id}}
 
@@ -37,10 +39,9 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
     assert is_integer(updated.risk_score)
     assert updated.risk_score > 0
 
-    # bank_profile se generó y tiene info coherente
-    assert is_map(updated.bank_profile)
-    assert is_integer(updated.bank_profile["score"])
-    assert updated.bank_profile["score"] > 0
+    # bank_profile NO es responsabilidad del worker generarlo;
+    # sólo debe respetar lo que ya hubiera
+    assert updated.bank_profile == app.bank_profile
 
     # el status salió de PENDING_RISK a algún estado “final”
     refute updated.status == "PENDING_RISK"
@@ -64,12 +65,14 @@ defmodule BravoMultipais.Workers.EvaluateRiskTest do
                    1_000
 
     assert received_id == app.id
+    # si en el futuro cambias el evento, puedes ajustar aquí
     assert event in ["updated", "status_changed"]
   end
 
-  test "perform/1 hace no-op si la aplicación no existe" do
-    job = %Oban.Job{args: %{"application_id" => Ecto.UUID.generate()}}
+  test "perform/1 hace no-op (discard) si la aplicación no existe" do
+    job = %Job{args: %{"application_id" => Ecto.UUID.generate()}}
 
-    assert :ok = EvaluateRisk.perform(job)
+    # ahora el worker descarta el job para que Oban no reintente indefinidamente
+    assert :discard = EvaluateRisk.perform(job)
   end
 end

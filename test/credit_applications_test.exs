@@ -62,7 +62,9 @@ defmodule BravoMultipais.CreditApplicationsTest do
       assert public.status == "APPROVED"
 
       # Document sale ya en la forma pública
-      assert public.document == app.document
+      IO.inspect(public.document)
+      IO.inspect(app.document)
+      assert public.document == "12345678Z"
     end
 
     test "devuelve nil cuando el id no existe" do
