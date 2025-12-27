@@ -1,0 +1,46 @@
+graph TB
+  subgraph Web Layer
+    C1["ApplicationController<br/>(REST API)"]
+    C2["ApplicationsLive<br/>(LiveView Backoffice)"]
+  end
+
+  subgraph Domain Layer
+    D1["CreditApplications.Context"]
+    D2["Application Schema"]
+    D3["Commands"]
+    D4["Queries"]
+  end
+
+  subgraph Async Layer
+    W1["Worker EvaluateRisk"]
+    W2["Worker WebhookNotifier"]
+    OB["Oban Jobs"]
+  end
+
+  subgraph Infra
+    R["Repo (Ecto + Postgres)"]
+    PS["Phoenix.PubSub"]
+    EXT["Bank Data Provider"]
+    WK["Webhook Destinations"]
+  end
+
+  C1 --> D3
+  C1 --> D4
+  C2 --> D3
+  C2 --> D4
+
+  D3 --> R
+  D4 --> R
+
+  D3 --> OB
+  OB --> W1
+  OB --> W2
+
+  W1 --> D3
+  W1 --> R
+  W1 --> EXT
+  W1 --> PS
+
+  W2 --> WK
+
+  PS --> C2

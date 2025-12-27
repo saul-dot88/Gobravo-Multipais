@@ -1,0 +1,29 @@
+title Re-evaluar riesgo y reenviar webhook
+
+participant Backoffice as Usuario backoffice (browser)
+participant LV as ApplicationsLive (LiveView)
+participant Oban as Oban
+participant RiskWorker as EvaluateRisk
+participant WebhookWorker as WebhookNotifier
+participant Repo as Repo (PostgreSQL)
+participant BankProvider as Bank Data Provider
+participant WebhookDest as Sistema integrador
+participant PubSub as Phoenix.PubSub
+
+Backoffice->LV: Click "Re-evaluar riesgo"
+LV->Oban: Enqueue EvaluateRisk(application_id)
+Oban->RiskWorker: perform(application_id)
+RiskWorker->Repo: SELECT Application
+RiskWorker->BankProvider: fetch_bank_profile(application)
+BankProvider-->RiskWorker: bank_profile + score
+RiskWorker->Repo: UPDATE Application\nrisk_score, status final, bank_profile
+RiskWorker->PubSub: broadcast "status_changed"
+
+Backoffice->LV: Click "Re-enviar webhook"
+LV->Oban: Enqueue WebhookNotifier(application_id)
+Oban->WebhookWorker: perform(application_id)
+WebhookWorker->Repo: SELECT Application (vista pública)
+WebhookWorker->WebhookDest: POST /webhook\npayload aplicación pública
+WebhookDest-->WebhookWorker: 200 OK / error
+WebhookWorker->PubSub: broadcast "webhook_resent"
+PubSub->LV: LiveView marca en timeline\n"Webhook reenviado"

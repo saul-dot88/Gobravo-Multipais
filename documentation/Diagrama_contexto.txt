@@ -1,0 +1,20 @@
+graph LR
+  subgraph Channels
+    A[PWA / Canal externo]
+    B["Backoffice User<br/>Browser"]
+  end
+
+  subgraph BravoMultipais System
+    BM["Bravo Multipais<br/>Phoenix App"]
+  end
+
+  subgraph External Systems
+    ES["Bank Data Provider<br/>(simulado)"]
+    WH["Partner Systems<br/>(Webhooks)"]
+  end
+
+  A -->|REST /api/applications| BM
+  B -->|HTTP LiveView /backoffice| BM
+
+  BM -->|HTTP/REST o cliente simulado| ES
+  BM -->|HTTP Webhook POST| WH

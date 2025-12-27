@@ -1,0 +1,40 @@
+erDiagram
+
+  USERS ||--o{ CREDIT_APPLICATIONS : "crea / supervisa (opcional)"
+  CREDIT_APPLICATIONS ||--o{ WEBHOOK_ATTEMPTS : "notificaciones por cambio de estado"
+
+  USERS {
+    uuid id
+    string email
+    string hashed_password
+    string role
+    timestamp inserted_at
+    timestamp updated_at
+  }
+
+  CREDIT_APPLICATIONS {
+    uuid id
+    string country
+    string full_name
+    jsonb document
+    numeric amount
+    numeric monthly_income
+    string status
+    int risk_score
+    jsonb bank_profile
+    string external_reference
+    timestamp inserted_at
+    timestamp updated_at
+  }
+
+  WEBHOOK_ATTEMPTS {
+    uuid id
+    uuid application_id
+    string target_url
+    jsonb payload
+    int response_code
+    text response_body
+    int attempts_count
+    timestamp last_attempt_at
+    timestamp inserted_at
+  }

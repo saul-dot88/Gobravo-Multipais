@@ -1,0 +1,28 @@
+title Crear solicitud y evaluación de riesgo
+
+participant Client as Canal externo / Backoffice
+participant Controller as ApplicationController / ApplicationsLive
+participant Commands as CreditApplications.Commands
+participant Repo as Repo (PostgreSQL)
+participant Oban as Oban
+participant Worker as EvaluateRisk
+participant BankProvider as Bank Data Provider
+participant PubSub as Phoenix.PubSub
+participant LV as ApplicationsLive (suscrito)
+
+Client->Controller: Enviar datos de solicitud\n(country, full_name, document, amount, income)
+Controller->Commands: create_application(params)
+Commands->Repo: INSERT Application\nstatus = PENDING_RISK
+Commands->Oban: Enqueue EvaluateRisk(application_id)
+Controller-->Client: 201 Created + JSON público\n(id, status=PENDING_RISK, ...)
+
+note over Oban,Worker: Procesamiento asíncrono
+
+Oban->Worker: perform(%{"application_id" => id})
+Worker->Repo: SELECT Application by id
+Worker->BankProvider: fetch_bank_profile(application)
+BankProvider-->Worker: bank_profile + score externo
+Worker->Repo: UPDATE Application\nrisk_score, status final, bank_profile
+Worker->PubSub: broadcast "status_changed"\n(id, status, risk_score)
+PubSub->LV: push evento a LiveView
+LV-->Client: UI se refresca con nuevo estado\n(APPROVED / UNDER_REVIEW / REJECTED)
