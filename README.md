@@ -92,6 +92,112 @@ api_client*	api_client@example.com	api123456	(Opcional) Usuario pensado para con
 
 Recomendación: abre priv/repo/seeds.ex, verifica las credenciales reales que estás insertando (email, password, rol) y actualiza esta tabla para que el README quede 100% alineado con tu código.
 
+## Mailbox de desarrollo (Swoosh)
+
+En entorno de desarrollo la app expone un **MailBox** para inspeccionar correos sin necesidad de un proveedor externo.
+
+- Ruta: `http://localhost:4000/dev/mailbox`
+- Está habilitado solo cuando `config :bravo_multipais, dev_routes: true`.
+
+Uso típico:
+
+1. Registras un usuario o solicitas un inicio de sesión (magic link / email de prueba).
+2. En vez de enviar el correo a un SMTP real, **Swoosh Mailbox** lo captura.
+3. Desde `http://localhost:4000/dev/mailbox` puedes:
+   - Ver el listado de correos enviados.
+   - Abrir el contenido HTML / texto.
+   - Copiar enlaces (por ejemplo, links de login o verificación).
+
+Esto permite probar **flujos de autenticación y notificaciones por correo** sin configurar credenciales externas ni ensuciar buzones reales.
+
+---
+
+## Acciones de Backoffice: Re-evaluar riesgo y Re-enviar webhook
+
+En el panel de backoffice (LiveView) cada solicitud tiene acciones que simulan cómo operaría un equipo de riesgo / operaciones sobre las aplicaciones ya creadas.
+
+### Re-evaluar riesgo
+
+Botón: **“Re-evaluar riesgo”**
+
+**Qué hace funcionalmente**
+
+- Toma la solicitud actual (por `id`).
+- Encola un **job de Oban** para recalcular el riesgo (mismo flujo que la evaluación inicial).
+- Cuando el worker termina:
+  - Actualiza `risk_score`, `status` y `bank_profile` en la base de datos.
+  - Publica un evento en PubSub (`topic: "applications"`) para notificar al panel.
+  - El LiveView actualiza:
+    - La tabla de “Solicitudes recientes”.
+    - El detalle de la solicitud.
+    - El timeline con un nuevo evento (“Riesgo re-evaluado”, etc.).
+
+**Por qué se hace así**
+
+- La evaluación de riesgo puede ser costosa o depender de servicios externos → se ejecuta **fuera del request** vía Oban.
+- Es **idempotente a nivel de negocio**: cada re-evaluación recalcula el estado en función de los datos actuales y reglas vigentes.
+- El backoffice ve el efecto casi en tiempo real gracias a PubSub, sin recargar la página.
+
+**Trade-offs**
+
+- La respuesta del botón no es síncrona: el cambio de estado tarda lo que tarde el job.
+- A cambio, el sistema es más robusto frente a:
+  - Timeouts, reintentos, picos de carga.
+  - Posibles futuras integraciones con motores de scoring externos.
+
+---
+
+### Re-enviar webhook
+
+Botón: **“Re-enviar webhook”** (visible cuando la solicitud ya tiene `risk_score` / estado final).
+
+**Qué hace funcionalmente**
+
+- Verifica que la solicitud:
+  - Existe.
+  - Tiene un `status` evaluado (no `PENDING_RISK`).
+- Obtiene la **vista pública** de la aplicación (proyección sin datos internos sensibles).
+- Encola un **job de Oban** encargado de:
+  - Construir el payload público (id, país, status, score, `external_reference`, etc.).
+  - Hacer un `POST` al endpoint configurado de webhook (simulando el sistema cliente).
+  - Registrar el resultado (éxito / error) en logs y en el timeline de la solicitud.
+
+**Por qué se hace así**
+
+- El webhook:
+  - No bloquea la UI ni el flujo principal de negocio.
+  - Es **reintetable**: si el sistema externo está caído o responde con error, el job puede reintentar según la política de Oban.
+- El payload se genera a partir de una **proyección pública**, lo que reduce el riesgo de filtrar datos internos o sensibles.
+- El botón permite al operador backoffice **recuperar integraciones** que fallaron en el pasado (ej. “cliente no recibió la notificación, re-enviar”).
+
+**Trade-offs y decisiones**
+
+- **Asíncrono**: el usuario del backoffice no ve el resultado al instante, pero puede:
+  - Revisar logs.
+  - Ver la entrada en el timeline cuando se complete.
+- **Modelado simple**: para el MVP se asume un solo endpoint de webhook por entorno.
+  - En una versión más avanzada podría haber:
+    - Distintos endpoints por cliente.
+    - Versionado del payload.
+    - Firmas HMAC para validar autenticidad en el sistema receptor.
+
+---
+
+## Resumen de flujo end-to-end con estas acciones
+
+1. **Crear solicitud** (Backoffice o API).
+2. **Encolar evaluación de riesgo** (automática).
+3. **Worker de riesgo** calcula score y status, actualiza DB, emite eventos.
+4. **UI backoffice** se actualiza (tabla + detalle + timeline).
+5. **Webhook automático** (si aplica) notifica al sistema externo.
+6. **Backoffice puede:**
+   - Re-evaluar riesgo (cambio de política, nueva info, etc.).
+   - Re-enviar el webhook (si el sistema cliente tuvo problemas).
+
+Este ciclo muestra que el sistema está pensado para:
+- Separar **interacciones humanas** (UI) de **procesos técnicos** (workers).
+- Mantener el flujo **observable y recuperable**, incluso cuando algo falla fuera de nuestro control.
+
 ⸻
 
 2. Supuestos

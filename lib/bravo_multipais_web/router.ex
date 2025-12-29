@@ -3,7 +3,6 @@ defmodule BravoMultipaisWeb.Router do
 
   import BravoMultipaisWeb.UserAuth
 
-  # Sólo alias si quieres, pero vamos a usar nombres completos para evitar confusiones
   # alias OpenApiSpex.Plug.{PutApiSpec, RenderSpec}
 
   ## Pipelines
@@ -26,7 +25,6 @@ defmodule BravoMultipaisWeb.Router do
     plug :backoffice_auth
   end
 
-  # Puedes dejar aquí PutApiSpec o sólo en el Endpoint; las dos cosas funcionan.
   pipeline :api_public do
     plug :accepts, ["json"]
     plug OpenApiSpex.Plug.PutApiSpec, module: BravoMultipaisWeb.ApiSpec
@@ -57,9 +55,6 @@ defmodule BravoMultipaisWeb.Router do
 
     forward "/metrics", PromEx.Plug, prom_ex_module: BravoMultipais.PromEx
   end
-
-  ## API pública + OpenAPI JSON
-  ## 👇 OJO: este scope NO tiene módulo, así evitamos el prefijo BravoMultipaisWeb.
 
   scope "/api" do
     pipe_through :api_public
