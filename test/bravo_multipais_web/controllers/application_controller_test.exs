@@ -128,17 +128,17 @@ defmodule BravoMultipaisWeb.ApplicationControllerTest do
 
     resp = json_response(conn, 200)
 
-assert resp["id"] == app.id
-assert resp["country"] == app.country
+    assert resp["id"] == app.id
+    assert resp["country"] == app.country
 
-# ahora el documento público es un string
-assert is_binary(resp["document"])
-assert resp["document"] == "12345678Z"
+    # ahora el documento público es un string
+    assert is_binary(resp["document"])
+    assert resp["document"] == "12345678Z"
   end
 
   test "GET /api/applications/:id show/2 returns 404 when not found", %{conn: conn} do
-  conn = get(conn, ~p"/api/applications/#{Ecto.UUID.generate()}")
+    conn = get(conn, ~p"/api/applications/#{Ecto.UUID.generate()}")
 
-  assert %{"error" => "application_not_found"} = json_response(conn, 404)
-end
+    assert %{"error" => "application_not_found"} = json_response(conn, 404)
+  end
 end

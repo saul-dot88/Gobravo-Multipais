@@ -283,26 +283,24 @@ defmodule BravoMultipais.CreditApplications do
     Map.put(base, :bank_profile, sanitize_bank_profile(app.bank_profile))
   end
 
- defp public_document(nil), do: nil
+  defp public_document(nil), do: nil
 
-defp public_document(%{} = doc) do
-  cond do
-    # ES
-    Map.has_key?(doc, "dni") -> doc["dni"]
-    Map.has_key?(doc, :dni) -> doc[:dni]
-    Map.has_key?(doc, "nif") -> doc["nif"]
-    Map.has_key?(doc, :nif) -> doc[:nif]
-    Map.has_key?(doc, "nie") -> doc["nie"]
-    Map.has_key?(doc, :nie) -> doc[:nie]
-
-    # IT
-    Map.has_key?(doc, "codice_fiscale") -> doc["codice_fiscale"]
-    Map.has_key?(doc, :codice_fiscale) -> doc[:codice_fiscale]
-
-    # fallback
-    true -> nil
+  defp public_document(%{} = doc) do
+    cond do
+      # ES
+      Map.has_key?(doc, "dni") -> doc["dni"]
+      Map.has_key?(doc, :dni) -> doc[:dni]
+      Map.has_key?(doc, "nif") -> doc["nif"]
+      Map.has_key?(doc, :nif) -> doc[:nif]
+      Map.has_key?(doc, "nie") -> doc["nie"]
+      Map.has_key?(doc, :nie) -> doc[:nie]
+      # IT
+      Map.has_key?(doc, "codice_fiscale") -> doc["codice_fiscale"]
+      Map.has_key?(doc, :codice_fiscale) -> doc[:codice_fiscale]
+      # fallback
+      true -> nil
+    end
   end
-end
 
   defp normalize_string_keys(map) do
     map

@@ -3,6 +3,9 @@ defmodule BravoMultipaisWeb.Router do
 
   import BravoMultipaisWeb.UserAuth
 
+  # Sólo alias si quieres, pero vamos a usar nombres completos para evitar confusiones
+  # alias OpenApiSpex.Plug.{PutApiSpec, RenderSpec}
+
   ## Pipelines
 
   pipeline :browser do
@@ -23,8 +26,10 @@ defmodule BravoMultipaisWeb.Router do
     plug :backoffice_auth
   end
 
+  # Puedes dejar aquí PutApiSpec o sólo en el Endpoint; las dos cosas funcionan.
   pipeline :api_public do
     plug :accepts, ["json"]
+    plug OpenApiSpex.Plug.PutApiSpec, module: BravoMultipaisWeb.ApiSpec
   end
 
   pipeline :api_protected do
@@ -37,7 +42,7 @@ defmodule BravoMultipaisWeb.Router do
     plug BravoMultipaisWeb.ApiAuth
   end
 
-  ## Backoffice UI – requiere login + rol
+  ## Backoffice UI
 
   scope "/", BravoMultipaisWeb do
     pipe_through [:browser, :browser_auth, :backoffice]
@@ -45,26 +50,32 @@ defmodule BravoMultipaisWeb.Router do
     live "/", ApplicationsLive, :index
   end
 
+  ## Métricas (PromEx)
+
   scope "/" do
     pipe_through :api_public
 
     forward "/metrics", PromEx.Plug, prom_ex_module: BravoMultipais.PromEx
   end
 
-  scope "/api", BravoMultipaisWeb do
+  ## API pública + OpenAPI JSON
+  ## 👇 OJO: este scope NO tiene módulo, así evitamos el prefijo BravoMultipaisWeb.
+
+  scope "/api" do
     pipe_through :api_public
 
-    get "/health", HealthController, :index
+    get "/health", BravoMultipaisWeb.HealthController, :index
+    get "/openapi", OpenApiSpex.Plug.RenderSpec, []   # ← módulo completo del plug externo
   end
 
-  ## API pública
+  ## API pública protegida (business endpoints)
 
   scope "/api", BravoMultipaisWeb do
     pipe_through :api_protected
 
     post "/applications", ApplicationController, :create
-    get "/applications/:id", ApplicationController, :show
-    get "/applications", ApplicationController, :index
+    get  "/applications/:id", ApplicationController, :show
+    get  "/applications", ApplicationController, :index
   end
 
   ## Mock webhooks
@@ -75,7 +86,7 @@ defmodule BravoMultipaisWeb.Router do
     post "/webhooks/applications", MockWebhookController, :receive
   end
 
-  ## Dev (dashboard, mailbox)
+  ## Dev (dashboard, mailbox, swagger)
 
   if Application.compile_env(:bravo_multipais, :dev_routes) do
     import Phoenix.LiveDashboard.Router
@@ -85,10 +96,15 @@ defmodule BravoMultipaisWeb.Router do
 
       live_dashboard "/dashboard", metrics: BravoMultipaisWeb.Telemetry
       forward "/mailbox", Plug.Swoosh.MailboxPreview
+
+      # Swagger UI nativo de open_api_spex
+      forward "/swagger", OpenApiSpex.Plug.SwaggerUI,
+        path: "/api/openapi",
+        title: "BravoMultipais API"
     end
   end
 
-  ## Rutas que requieren usuario autenticado (settings)
+  ## Settings
 
   scope "/", BravoMultipaisWeb do
     pipe_through [:browser, :browser_auth]
@@ -102,7 +118,7 @@ defmodule BravoMultipaisWeb.Router do
     post "/users/update-password", UserSessionController, :update_password
   end
 
-  ## Registro / login / magic link (públicas)
+  ## Registro / login
 
   scope "/", BravoMultipaisWeb do
     pipe_through [:browser, :redirect_if_user_is_authenticated]
@@ -117,7 +133,7 @@ defmodule BravoMultipaisWeb.Router do
     post "/users/log-in", UserSessionController, :create
   end
 
-  ## Logout sin redirect_if_user_is_authenticated
+  ## Logout
 
   scope "/", BravoMultipaisWeb do
     pipe_through [:browser]

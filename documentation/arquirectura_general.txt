@@ -1,0 +1,62 @@
+flowchart TB
+  subgraph PhoenixApp["BravoMultipais Web<br/>(Phoenix)"]
+    lv["ApplicationsLive<br/>(LiveView backoffice)"]
+    api["ApplicationController<br/>(/api/applications)"]
+    usersLV["UserLive.*<br/>(login, registro, settings)"]
+
+    subgraph Contexts["Contexts / Dominios"]
+      ca["CreditApplications<br/>(Contexto)"]
+      acc["Accounts<br/>(Contexto)"]
+    end
+
+    repo["Repo<br/>(Ecto)"]
+    obanCli["Oban<br/>(Cliente)"]
+    mailer["Mailer"]
+    pubsub["Phoenix.PubSub<br/>(topic: applications)"]
+  end
+
+  db[("PostgreSQL")]
+  obanQ[("Cola Oban")]
+  riskW["Workers.EvaluateRisk"]
+  webhookW["Workers.WebhookNotifier"]
+  bankExt["Bank Data Provider<br/>(externo/simulado)"]
+  webhookDest["Sistemas integradores<br/>(destino Webhook)"]
+
+  %% UI/API → Contextos
+  lv --> ca
+  api --> ca
+  usersLV --> acc
+
+  %% Accounts / auth
+  acc --> repo
+  usersLV --> mailer
+
+  %% CreditApplications
+  ca --> repo
+  ca --> obanCli
+
+  %% Infra de jobs
+  obanCli --> obanQ
+  obanQ --> riskW
+  obanQ --> webhookW
+
+  %% Workers
+  riskW --> repo
+  riskW --> bankExt
+  riskW --> pubsub
+
+  webhookW --> repo
+  webhookW --> webhookDest
+  webhookW --> pubsub
+
+  %% Repo/DB
+  repo --> db
+
+  %% PubSub -> LiveView
+  pubsub --> lv
+
+  %% Observabilidad
+  PhoenixApp --> prom
+  db --> prom
+  obanQ --> prom
+  prom --> graf

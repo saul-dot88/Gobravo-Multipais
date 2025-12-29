@@ -1,11 +1,38 @@
 defmodule BravoMultipaisWeb.ApplicationController do
   use BravoMultipaisWeb, :controller
+  use OpenApiSpex.ControllerSpecs
+
 
   alias BravoMultipais.CreditApplications
   alias BravoMultipaisWeb.ApiAuth
 
+  alias BravoMultipaisWeb.Schemas.{
+    CreditApplicationCreateRequest,
+    CreditApplicationResponse,
+    Error
+  }
+
+  alias OpenApiSpex.Schema
+
+
   plug :require_backoffice when action in [:index, :show]
   plug :require_creator when action in [:create]
+
+  tags(["Applications"])
+
+  operation(
+    :index,
+    summary: "List credit applications",
+    description: "Lista de solicitudes de crédito (demo, sin paginación).",
+    responses: %{
+      200 =>
+        {"List of applications", "application/json",
+         %Schema{
+           type: :array,
+           items: CreditApplicationResponse
+         }}
+    }
+  )
 
   # GET /api/applications
   def index(conn, params) do
@@ -13,19 +40,41 @@ defmodule BravoMultipaisWeb.ApplicationController do
     json(conn, %{data: apps})
   end
 
+  operation(:create,
+    summary: "Create credit application",
+    description: "Crea una nueva solicitud de crédito multipaís.",
+    request_body:
+      {"Application payload", "application/json", CreditApplicationCreateRequest, required: true},
+    responses: %{
+      201 => {"Application created", "application/json", CreditApplicationResponse},
+      400 => {"Bad request", "application/json", Error}
+    }
+  )
+
   # GET /api/applications/:id
   def show(conn, %{"id" => id}) do
-  case BravoMultipais.CreditApplications.get_application_public(id) do
-    nil ->
-      conn
-      |> put_status(:not_found)
-      |> json(%{"error" => "application_not_found"})
+    case BravoMultipais.CreditApplications.get_application_public(id) do
+      nil ->
+        conn
+        |> put_status(:not_found)
+        |> json(%{"error" => "application_not_found"})
 
-    public_app ->
-      # JSON plano, con "id", "country", "document" (string), etc.
-      json(conn, public_app)
+      public_app ->
+        # JSON plano, con "id", "country", "document" (string), etc.
+        json(conn, public_app)
+    end
   end
-end
+
+  operation(:show,
+    summary: "Get credit application by ID",
+    parameters: [
+      id: [in: :path, description: "Application UUID", type: :string, example: "uuid-here"]
+    ],
+    responses: %{
+      200 => {"Application", "application/json", CreditApplicationResponse},
+      404 => {"Not found", "application/json", Error}
+    }
+  )
 
   # POST /api/applications
   def create(conn, params) do
