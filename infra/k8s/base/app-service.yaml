@@ -5,7 +5,7 @@ metadata:
 spec:
   selector:
     app: bravo-multipais
-    component: web    # <- clave: sólo pods web
+    component: web 
   type: ClusterIP
   ports:
     - name: http

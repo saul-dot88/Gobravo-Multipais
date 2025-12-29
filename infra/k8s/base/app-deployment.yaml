@@ -23,7 +23,6 @@ spec:
             - name: http
               containerPort: 4000
 
-          # Aquí sí levantamos Phoenix
           env:
             - name: PHX_SERVER
               value: "true"

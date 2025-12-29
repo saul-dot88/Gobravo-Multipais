@@ -3,7 +3,7 @@
 # ============
 K8S_DIR        := deploy/k8s
 K8S_NAMESPACE  ?= default
-K8S_CONTEXT    ?= # opcional: kubectl context, déjalo vacío si sólo tienes uno
+K8S_CONTEXT    ?= # opcional
 APP_NAME       := bravo-multipais
 IMAGE          ?= tu-registry/bravo_multipais:0.1.0
 

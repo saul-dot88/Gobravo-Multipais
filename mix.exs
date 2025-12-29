@@ -73,7 +73,8 @@ defmodule BravoMultipais.MixProject do
       {:cachex, "~> 3.6"},
       {:prom_ex, "~> 1.11"},
       {:telemetry_metrics_prometheus_core, "~> 1.2"},
-      {:open_api_spex, "~> 3.21"}
+      {:open_api_spex, "~> 3.21"},
+          {:archeometer, "~> 0.2", only: [:dev, :test], runtime: false}
     ]
   end
 

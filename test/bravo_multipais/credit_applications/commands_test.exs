@@ -16,7 +16,6 @@ defmodule BravoMultipais.CreditApplications.CommandsTest do
 
       assert {:ok, %Application{} = app} = Commands.create_application(params)
 
-      # 👇 Aquí validamos el estado inicial antes de que el worker de riesgo actúe
       assert app.country == "ES"
       assert app.status == "PENDING_RISK"
       assert app.document == %{"dni" => "12345678Z", "raw" => "12345678Z"}
@@ -26,7 +25,6 @@ defmodule BravoMultipais.CreditApplications.CommandsTest do
       app_db = Repo.get!(Application, app.id)
       assert app_db.country == "ES"
       assert app_db.document == %{"dni" => "12345678Z", "raw" => "12345678Z"}
-      # 👇 no asertamos el status porque el worker ya lo pudo cambiar
       # assert app_db.status == "PENDING_RISK"
     end
 

@@ -176,7 +176,7 @@ defmodule BravoMultipaisWeb.UserAuthTest do
         |> init_test_session(session)
         |> UserAuth.fetch_current_scope_for_user([])
 
-      # ✅ Assert mínimos que sí cumple tu implementación actual
+      # Assert mínimos que sí cumple tu implementación actual
       assert conn.assigns.current_scope.user.id == user.id
       assert conn.assigns.current_scope.user.authenticated_at == user.authenticated_at
 
