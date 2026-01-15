@@ -220,7 +220,7 @@ defmodule BravoMultipaisWeb.UserAuthTest do
         |> put_req_cookie(@remember_me_cookie, signed_token)
         |> UserAuth.fetch_current_scope_for_user([])
 
-      # ✅ El user sigue autenticado correctamente
+      # El user sigue autenticado correctamente
       assert conn.assigns.current_scope.user.id == user_from_db.id
       assert conn.assigns.current_scope.user.authenticated_at == user_from_db.authenticated_at
 

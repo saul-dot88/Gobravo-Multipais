@@ -60,7 +60,8 @@ defmodule BravoMultipaisWeb.Router do
     pipe_through :api_public
 
     get "/health", BravoMultipaisWeb.HealthController, :index
-    get "/openapi", OpenApiSpex.Plug.RenderSpec, []   # ← módulo completo del plug externo
+    # ← módulo completo del plug externo
+    get "/openapi", OpenApiSpex.Plug.RenderSpec, []
   end
 
   ## API pública protegida (business endpoints)
@@ -69,8 +70,8 @@ defmodule BravoMultipaisWeb.Router do
     pipe_through :api_protected
 
     post "/applications", ApplicationController, :create
-    get  "/applications/:id", ApplicationController, :show
-    get  "/applications", ApplicationController, :index
+    get "/applications/:id", ApplicationController, :show
+    get "/applications", ApplicationController, :index
   end
 
   ## Mock webhooks

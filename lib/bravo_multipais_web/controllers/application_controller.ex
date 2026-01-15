@@ -2,7 +2,6 @@ defmodule BravoMultipaisWeb.ApplicationController do
   use BravoMultipaisWeb, :controller
   use OpenApiSpex.ControllerSpecs
 
-
   alias BravoMultipais.CreditApplications
   alias BravoMultipaisWeb.ApiAuth
 
@@ -13,7 +12,6 @@ defmodule BravoMultipaisWeb.ApplicationController do
   }
 
   alias OpenApiSpex.Schema
-
 
   plug :require_backoffice when action in [:index, :show]
   plug :require_creator when action in [:create]

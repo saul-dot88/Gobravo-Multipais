@@ -1,16 +1,13 @@
 defmodule BravoMultipais.Policies.Factory do
   @moduledoc """
-  Selecciona la política correspondiente según el país.
+  DEPRECADO.
+
+  Este módulo existía como selector alterno de policy.
+  Mantenerlo como wrapper evita confusión y permite migración gradual.
+
+  Usa `BravoMultipais.Policies.policy_for/1`.
   """
-  alias BravoMultipais.Policies.{ES, IT, PT}
 
-  def policy_for("ES"), do: ES
-  def policy_for("IT"), do: IT
-  def policy_for("PT"), do: PT
-
-  # Por si en algún momento llega el país como átomo o minúsculas
-  def policy_for(:ES), do: ES
-  def policy_for(:IT), do: IT
-  def policy_for(:PT), do: PT
-  def policy_for(country) when is_binary(country), do: country |> String.upcase() |> policy_for()
+  @deprecated "Use BravoMultipais.Policies.policy_for/1"
+  def policy_for(country), do: BravoMultipais.Policies.policy_for(country)
 end

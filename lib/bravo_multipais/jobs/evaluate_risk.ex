@@ -7,7 +7,7 @@ defmodule BravoMultipais.Jobs.EvaluateRisk do
   """
 
   alias BravoMultipais.CreditApplications.Application
-  alias BravoMultipais.Policies.Factory, as: PolicyFactory
+  alias BravoMultipais.Policies
 
   @type result :: %{
           score: integer(),
@@ -16,7 +16,7 @@ defmodule BravoMultipais.Jobs.EvaluateRisk do
 
   @spec run(Application.t()) :: result
   def run(%Application{} = app) do
-    policy = PolicyFactory.policy_for(app.country)
+    policy = Policies.policy_for(app.country)
     bank_profile = app.bank_profile || %{}
 
     params = %{
