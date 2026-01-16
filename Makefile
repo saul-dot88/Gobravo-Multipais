@@ -96,3 +96,17 @@ k8s-logs-workers: k8s-preflight
 	$(KUBECTL) logs -n $(K8S_NAMESPACE) \
 		$$( $(KUBECTL) get pods -n $(K8S_NAMESPACE) -l app=$(APP_NAME),component=worker -o name | head -n1 ) \
 		-f
+
+.PHONY: compose-up
+compose-up:
+	@docker compose up --build
+
+.PHONY: compose-down
+compose-down:
+	@docker compose down -v
+
+.PHONY: smoke
+smoke:
+	@echo ">>> Waiting for web to be healthy..."
+	@curl -fsS http://localhost:4000/healthz >/dev/null
+	@echo ">>> OK healthz"
