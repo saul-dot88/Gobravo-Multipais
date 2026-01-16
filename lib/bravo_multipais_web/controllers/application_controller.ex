@@ -4,6 +4,7 @@ defmodule BravoMultipaisWeb.ApplicationController do
 
   alias BravoMultipais.CreditApplications
   alias BravoMultipaisWeb.ApiAuth
+  alias BravoMultipais.Bank.Normalizer
 
   alias BravoMultipaisWeb.Schemas.{
     CreditApplicationCreateRequest,
@@ -108,23 +109,38 @@ defmodule BravoMultipaisWeb.ApplicationController do
 
   # --- normalización de documento ---
 
-  defp normalize_document(%{"document" => %{} = _doc} = params), do: params
+  defp normalize_document(params) when is_map(params) do
+    country =
+      Map.get(params, "country") ||
+        Map.get(params, :country)
 
-  defp normalize_document(%{"country" => country, "document_value" => value} = params) do
     document =
-      case String.upcase(country) do
-        "IT" -> %{"codice_fiscale" => value}
-        "ES" -> %{"dni" => value}
-        "PT" -> %{"nif" => value}
-        _ -> %{"raw" => value}
-      end
+      Map.get(params, "document") ||
+        Map.get(params, :document)
 
-    params
-    |> Map.put("document", document)
-    |> Map.delete("document_value")
+    document_value =
+      Map.get(params, "document_value") ||
+        Map.get(params, :document_value)
+
+    cond do
+      is_map(document) ->
+        params
+
+      is_binary(document_value) and not is_nil(country) ->
+        doc_map =
+          Normalizer.build_document_map(
+            country |> to_string() |> String.trim() |> String.upcase(),
+            document_value
+          )
+
+        params
+        |> Map.put("document", doc_map)
+        |> Map.delete("document_value")
+
+      true ->
+        params
+    end
   end
-
-  defp normalize_document(params), do: params
 
   # --- plugs privados ---
 
