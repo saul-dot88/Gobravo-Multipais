@@ -10,7 +10,7 @@ defmodule BravoMultipais.CreditApplications.Commands do
     * Resuelve la policy por país y valida el documento.
     * Consulta el perfil bancario simulado (`Bank.fetch_profile/2`).
     * Aplica reglas de negocio (`Policies.policy_for/1`).
-    * Persiste la solicitud y encola un job de riesgo en Oban.
+    * Persiste la solicitud y encola un job de riesgo en Oban (atómico).
   """
 
   alias BravoMultipais.{Bank, Repo}
@@ -47,14 +47,10 @@ defmodule BravoMultipais.CreditApplications.Commands do
     amount = fetch(params, "amount")
     monthly_income = fetch(params, "monthly_income")
 
-    # El documento puede venir como:
-    #   * "document" => %{"dni" => "...", ...}
-    #   * "document_value" => "BNCMRC80A01F205Y"
     raw_document =
       fetch(params, "document") ||
         fetch(params, "document_value")
 
-    # Si de verdad faltan país o documento → payload inválido
     if is_nil(country) or is_nil(raw_document) do
       {:error, :invalid_payload}
     else
@@ -69,19 +65,15 @@ defmodule BravoMultipais.CreditApplications.Commands do
         |> to_string()
         |> String.trim()
 
-      # Construimos el mapa de documento:
       doc_map =
         cond do
           is_map(raw_document) ->
-            # Ya viene estructurado, lo usamos tal cual
             raw_document
 
           is_binary(raw_document) ->
-            # Es un string plano, lo normalizamos según país
             Normalizer.build_document_map(normalized_country, raw_document)
 
           true ->
-            # Cualquier otra cosa rara, intentamos convertir a string
             Normalizer.build_document_map(normalized_country, to_string(raw_document))
         end
 
@@ -94,26 +86,14 @@ defmodule BravoMultipais.CreditApplications.Commands do
       }
 
       with policy <- Policies.policy_for(attrs.country),
-           :ok <- policy.validate_document(attrs.document),
-           {:ok, bank_profile} <- Bank.fetch_profile(attrs.country, attrs),
-           :ok <- policy.business_rules(attrs, bank_profile),
+           :ok <- ok_or_policy_error(policy.validate_document(attrs.document)),
+           {:ok, bank_profile} <- ok_or_bank_error(Bank.fetch_profile(attrs.country, attrs)),
+           :ok <- ok_or_policy_error(policy.business_rules(attrs, bank_profile)),
            {:ok, app} <- persist_and_enqueue(attrs, bank_profile, policy) do
         {:ok, app}
       else
-        # Errores "simples"
-        {:error, {:policy_error, reason}} ->
-          {:error, {:policy_error, reason}}
-
-        {:error, {:bank_error, reason}} ->
-          {:error, {:bank_error, reason}}
-
         {:error, reason} ->
-          # Cualquier otro {:error, algo} directo
           {:error, reason}
-
-        # Errores con forma {:error, type, reason}
-        {:error, type, reason} ->
-          {:error, {type, reason}}
 
         other ->
           {:error, {:unexpected_error, other}}
@@ -127,17 +107,35 @@ defmodule BravoMultipais.CreditApplications.Commands do
   # Helpers de lectura
   # =====================
 
-  # Lee clave como string o atom; si no existe, devuelve nil
-  defp fetch(params, key) do
+  # Lee clave como string o atom existente; si no existe, devuelve nil.
+  defp fetch(params, key) when is_binary(key) do
     Map.get(params, key) ||
-      Map.get(params, String.to_atom(key))
+      case safe_existing_atom(key) do
+        nil -> nil
+        atom -> Map.get(params, atom)
+      end
+  end
+
+  defp safe_existing_atom(key) do
+    String.to_existing_atom(key)
   rescue
-    ArgumentError ->
-      Map.get(params, key)
+    ArgumentError -> nil
   end
 
   # =====================
-  # Persistencia + Oban
+  # Normalización de errores
+  # =====================
+
+  defp ok_or_policy_error(:ok), do: :ok
+  defp ok_or_policy_error({:error, reason}), do: {:error, {:policy_error, reason}}
+  defp ok_or_policy_error(other), do: {:error, {:policy_error, other}}
+
+  defp ok_or_bank_error({:ok, profile}), do: {:ok, profile}
+  defp ok_or_bank_error({:error, reason}), do: {:error, {:bank_error, reason}}
+  defp ok_or_bank_error(other), do: {:error, {:bank_error, other}}
+
+  # =====================
+  # Persistencia + Oban (ATÓMICO)
   # =====================
 
   @spec persist_and_enqueue(map(), map(), module()) ::
@@ -151,18 +149,40 @@ defmodule BravoMultipais.CreditApplications.Commands do
       |> Map.put(:status, initial_status)
       |> Map.put(:bank_profile, bank_profile)
 
-    %Application{}
-    |> Application.changeset(changes)
-    |> Repo.insert()
+    changeset =
+      %Application{}
+      |> Application.changeset(changes)
+
+    Repo.transaction(fn ->
+      case Repo.insert(changeset) do
+        {:ok, app} ->
+          case EvaluateRiskWorker.enqueue(app.id) do
+            {:ok, _job} ->
+              app
+
+            :ok ->
+              app
+
+            {:error, reason} ->
+              Repo.rollback({:job_enqueue_failed, reason})
+
+            other ->
+              Repo.rollback({:job_enqueue_failed, other})
+          end
+
+        {:error, cs} ->
+          Repo.rollback({:invalid_changeset, cs})
+      end
+    end)
     |> case do
       {:ok, app} ->
-        case EvaluateRiskWorker.enqueue(app.id) do
-          :ok -> {:ok, app}
-          {:error, reason} -> {:error, {:job_enqueue_failed, reason}}
-        end
+        {:ok, app}
 
-      {:error, changeset} ->
-        {:error, {:invalid_changeset, changeset}}
+      {:error, {:invalid_changeset, cs}} ->
+        {:error, {:invalid_changeset, cs}}
+
+      {:error, {:job_enqueue_failed, reason}} ->
+        {:error, {:job_enqueue_failed, reason}}
     end
   end
 end

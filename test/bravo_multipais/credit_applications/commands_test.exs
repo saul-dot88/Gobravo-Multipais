@@ -62,7 +62,7 @@ defmodule BravoMultipais.CreditApplications.CommandsTest do
         "monthly_income" => "300"
       }
 
-      assert {:error, :income_too_low} = Commands.create_application(params)
+      assert {:error, {:policy_error, :income_too_low}} = Commands.create_application(params)
     end
   end
 end
