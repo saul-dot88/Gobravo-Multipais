@@ -2,7 +2,12 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   @moduledoc """
   Worker que envía un webhook externo cuando cambia una solicitud de crédito.
 
-  En entorno de test **no** hace llamadas HTTP reales, sólo hace log y termina en :ok.
+  Política de reintentos:
+    * 2xx -> :ok
+    * 4xx -> :discard (error permanente)
+    * 5xx / timeout / network -> {:error, ...} (retry por Oban)
+
+  En entorno de test NO hace llamadas HTTP reales (solo log y :ok).
   """
 
   use Oban.Worker,
@@ -22,33 +27,52 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   require Logger
 
   @topic "applications"
+  @event_type "application.status_changed"
+  @event_version "v1"
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"application_id" => application_id}}) do
     app = Repo.get!(Application, application_id)
 
-    if skip_webhooks?() do
-      Logger.debug("Skipping webhook (config skip_webhooks=true)",
-        application_id: app.id,
-        status: app.status,
-        risk_score: app.risk_score
-      )
+    cond do
+      test_env?() ->
+        Logger.debug("WebhookNotifier: test env, skipping real HTTP",
+          application_id: app.id,
+          status: app.status,
+          risk_score: app.risk_score
+        )
 
-      :ok
-    else
-      do_send_webhook(app)
+        :ok
+
+      skip_webhooks?() ->
+        Logger.debug("WebhookNotifier: skipping webhook (skip_webhooks=true)",
+          application_id: app.id,
+          status: app.status,
+          risk_score: app.risk_score
+        )
+
+        :ok
+
+      true ->
+        do_send_webhook(app)
     end
   end
 
+  defp test_env? do
+    # Works in mix environments; safe even in releases if MIX_ENV not present.
+    System.get_env("MIX_ENV") == "test"
+  end
+
   defp skip_webhooks? do
-    Elixir.Application.get_env(:bravo_multipais, :skip_webhooks, false)
+    # Config app-level (mantiene compatibilidad con tu código actual)
+    Elixir.Application.get_env(:bravo_multipais, :skip_webhooks, false) ||
+      System.get_env("SKIP_WEBHOOKS") in ["true", "1", "TRUE"]
   end
 
   @doc """
   Helper para encolar el job del webhook desde cualquier parte del dominio.
 
   Ejemplo:
-
       WebhookNotifier.enqueue(app.id)
   """
   @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
@@ -64,80 +88,93 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
   # --- implementación real para dev/prod ---
 
-  defp do_send_webhook(app) do
+  defp do_send_webhook(%Application{} = app) do
     url = webhook_url()
 
     payload = %{
-      application_id: app.id,
-      status: app.status,
-      risk_score: app.risk_score,
-      country: app.country
+      event_id: Ecto.UUID.generate(),
+      event_type: @event_type,
+      version: @event_version,
+      data: %{
+        application_id: app.id,
+        status: app.status,
+        risk_score: app.risk_score,
+        country: app.country
+      }
     }
 
     body = Jason.encode!(payload)
 
     headers = [
       {"content-type", "application/json"},
-      {"x-bravo-event", "credit_application.updated"}
+      {"x-bravo-event", @event_type},
+      {"x-bravo-event-version", @event_version}
     ]
 
-    Logger.info("Enviando webhook de aplicación",
+    Logger.info("WebhookNotifier: sending webhook",
       application_id: app.id,
       status: app.status,
       url: url
     )
 
-    request =
-      Finch.build(:post, url, headers, body)
-      |> Finch.request(BravoMultipais.Finch)
+    Finch.build(:post, url, headers, body)
+    |> Finch.request(BravoMultipais.Finch)
+    |> handle_http_response(app)
+  end
 
-    case request do
-      {:ok, resp} ->
-        case resp.status do
-          status when status in 200..299 ->
-            Logger.info("Webhook enviado correctamente",
-              application_id: app.id,
-              status: app.status,
-              http_status: status
-            )
-
-            # refrescar UI igual que EvaluateRisk
-            Endpoint.broadcast(@topic, "status_changed", %{
-              id: app.id,
-              status: app.status,
-              risk_score: app.risk_score,
-              at: DateTime.utc_now()
-            })
-
-            Endpoint.broadcast(@topic, "webhook_resent", %{
-              application_id: app.id,
-              at: DateTime.utc_now()
-            })
-
-            :ok
-
-          status ->
-            Logger.error("Webhook respondió con error",
-              application_id: app.id,
-              http_status: status,
-              response: inspect(resp)
-            )
-
-            {:error, {:http_error, status}}
-        end
-
-      {:error, reason} ->
-        Logger.error("Error HTTP enviando webhook",
+  defp handle_http_response({:ok, resp}, %Application{} = app) do
+    case resp.status do
+      status when status in 200..299 ->
+        Logger.info("WebhookNotifier: delivered",
           application_id: app.id,
-          reason: inspect(reason)
+          status: app.status,
+          http_status: status
         )
 
-        {:error, reason}
+        Endpoint.broadcast(@topic, "status_changed", %{
+          id: app.id,
+          status: app.status,
+          risk_score: app.risk_score,
+          at: DateTime.utc_now()
+        })
+
+        Endpoint.broadcast(@topic, "webhook_resent", %{
+          application_id: app.id,
+          at: DateTime.utc_now()
+        })
+
+        :ok
+
+      status when status in 400..499 ->
+        Logger.error("WebhookNotifier: permanent failure (4xx), discarding",
+          application_id: app.id,
+          http_status: status,
+          response: inspect(resp)
+        )
+
+        :discard
+
+      status ->
+        Logger.error("WebhookNotifier: transient failure (5xx), will retry",
+          application_id: app.id,
+          http_status: status,
+          response: inspect(resp)
+        )
+
+        {:error, {:http_error, status}}
     end
   end
 
+  defp handle_http_response({:error, reason}, %Application{} = app) do
+    Logger.error("WebhookNotifier: network/finch error, will retry",
+      application_id: app.id,
+      reason: inspect(reason)
+    )
+
+    {:error, reason}
+  end
+
   defp webhook_url do
-    # Usamos Elixir.Application para no chocar con el alias Application del schema
     Elixir.Application.get_env(
       :bravo_multipais,
       :webhook_url,
