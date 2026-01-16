@@ -7,7 +7,13 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
   use Oban.Worker,
     queue: :webhooks,
-    max_attempts: 5
+    max_attempts: 5,
+    unique: [
+      fields: [:worker, :queue, :args],
+      keys: [:application_id],
+      period: 60,
+      states: [:available, :scheduled, :executing, :retryable]
+    ]
 
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Repo

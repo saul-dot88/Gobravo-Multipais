@@ -11,7 +11,13 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
 
   use Oban.Worker,
     queue: :risk,
-    max_attempts: 5
+    max_attempts: 5,
+    unique: [
+      fields: [:worker, :queue, :args],
+      keys: [:application_id],
+      period: 60,
+      states: [:available, :scheduled, :executing, :retryable]
+    ]
 
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Jobs.EvaluateRisk, as: EvaluateRiskJob
