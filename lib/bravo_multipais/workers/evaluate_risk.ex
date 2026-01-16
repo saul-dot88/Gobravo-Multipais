@@ -7,6 +7,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     * Ejecutar el job de dominio.
     * Actualizar la aplicación (status + risk_score).
     * Notificar al LiveView via PubSub.
+    * Encolar webhook notifier (si está habilitado).
   """
 
   use Oban.Worker,
@@ -23,6 +24,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   alias BravoMultipais.Jobs.EvaluateRisk, as: EvaluateRiskJob
   alias BravoMultipais.LogSanitizer
   alias BravoMultipais.Repo
+  alias BravoMultipais.Workers.WebhookNotifier
   alias BravoMultipaisWeb.Endpoint
 
   import Ecto.Changeset
@@ -83,6 +85,8 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
               risk_score: updated.risk_score
             })
 
+            maybe_enqueue_webhook(updated)
+
             :ok
 
           {:error, changeset} ->
@@ -107,6 +111,34 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     |> case do
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
+    end
+  end
+
+  defp maybe_enqueue_webhook(%Application{} = app) do
+    case System.get_env("SKIP_WEBHOOKS") do
+      "true" ->
+        :ok
+
+      "1" ->
+        :ok
+
+      "TRUE" ->
+        :ok
+
+      _ ->
+        case WebhookNotifier.enqueue(app.id) do
+          :ok ->
+            Logger.info("Risk worker: webhook enqueued", application_id: app.id)
+            :ok
+
+          {:error, reason} ->
+            Logger.warning("Risk worker: webhook enqueue failed",
+              application_id: app.id,
+              reason: inspect(reason)
+            )
+
+            :ok
+        end
     end
   end
 end
