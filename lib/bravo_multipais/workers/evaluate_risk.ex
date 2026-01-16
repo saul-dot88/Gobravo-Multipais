@@ -29,7 +29,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   require Logger
 
   @topic "applications"
-  @final_statuses ~w(APPROVED REJECTED)
+  @final_statuses ~w(APPROVED REJECTED UNDER_REVIEW)
 
   @impl Oban.Worker
   def perform(%Oban.Job{args: %{"application_id" => id}}) do
