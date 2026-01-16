@@ -1,23 +1,89 @@
 services:
-  prometheus:
-    image: prom/prometheus:latest
-    container_name: prometheus
-    volumes:
-      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    command:
-      - "--config.file=/etc/prometheus/prometheus.yml"
-    ports:
-      - "9090:9090"
-    restart: unless-stopped
-
-  grafana:
-    image: grafana/grafana-oss:latest
-    container_name: grafana
-    ports:
-      - "3000:3000"
+  db:
+    image: postgres:16
+    container_name: bravo_db
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      POSTGRES_DB: bravo_multipais_prod
+      POSTGRES_USER: bravo_user
+      POSTGRES_PASSWORD: bravo_pass
+    ports:
+      - "5432:5432"
+    volumes:
+      - bravo_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bravo_user -d bravo_multipais_prod"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  webhook:
+    image: kennethreitz/httpbin
+    container_name: bravo_webhook_receiver
+    ports:
+      - "4001:80"
+
+  migrate:
+    build:
+      context: .
+    container_name: bravo_migrate
     depends_on:
-      - prometheus
-    restart: unless-stopped
+      db:
+        condition: service_healthy
+    environment:
+      MIX_ENV: prod
+      DATABASE_URL: ecto://bravo_user:bravo_pass@db:5432/bravo_multipais_prod
+      SECRET_KEY_BASE: dev_secret_key_base_change_me
+      POOL_SIZE: "10"
+      ECTO_IPV6: "false"
+    command: ["bin/bravo_multipais", "eval", "BravoMultipais.Release.migrate()"]
+    restart: "no"
+
+  web:
+    build:
+      context: .
+    container_name: bravo_web
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MIX_ENV: prod
+      PHX_SERVER: "true"
+      PORT: "4000"
+
+      DATABASE_URL: ecto://bravo_user:bravo_pass@db:5432/bravo_multipais_prod
+      SECRET_KEY_BASE: dev_secret_key_base_change_me
+
+      URL_HOST: localhost
+      URL_SCHEME: http
+      URL_PORT: "4000"
+      POOL_SIZE: "10"
+      ECTO_IPV6: "false"
+
+      SKIP_WEBHOOKS: "false"
+      WEBHOOK_URL: http://webhook/post
+    ports:
+      - "4000:4000"
+    command: ["bin/bravo_multipais", "start"]
+
+  workers:
+    build:
+      context: .
+    container_name: bravo_workers
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    environment:
+      MIX_ENV: prod
+      
+      DATABASE_URL: ecto://bravo_user:bravo_pass@db:5432/bravo_multipais_prod
+      SECRET_KEY_BASE: dev_secret_key_base_change_me
+
+      POOL_SIZE: "10"
+      ECTO_IPV6: "false"
+
+      SKIP_WEBHOOKS: "false"
+      WEBHOOK_URL: http://webhook/post
+    command: ["bin/bravo_multipais", "start"]
+
+volumes:
+  bravo_db_data:

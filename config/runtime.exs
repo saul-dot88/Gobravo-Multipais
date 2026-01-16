@@ -58,12 +58,20 @@ if config_env() == :prod do
 
   config :bravo_multipais, BravoMultipaisWeb.Endpoint,
     url: [host: host, port: url_port, scheme: url_scheme],
-    http: [
-      # Bind en todas las interfaces IPv6 (0.0.0.0 equivalente)
-      ip: {0, 0, 0, 0, 0, 0, 0, 0},
-      port: http_port
-    ],
-    secret_key_base: secret_key_base
+    bind_ip =
+  if System.get_env("PHX_IPV6") in ~w(true 1) do
+    {0, 0, 0, 0, 0, 0, 0, 0}
+  else
+    {0, 0, 0, 0}
+  end
+
+config :bravo_multipais, BravoMultipaisWeb.Endpoint,
+  url: [host: host, port: url_port, scheme: url_scheme],
+  http: [
+    ip: bind_ip,
+    port: http_port
+  ],
+  secret_key_base: secret_key_base
 
   # ─────────────────────────────────────────────
   # Configuración de webhooks (WebhookNotifier)

@@ -48,7 +48,7 @@ config :bravo_multipais,
 
 config :bravo_multipais, Oban,
   repo: BravoMultipais.Repo,
-  queues: [risk: 10, webhook: 5],
+  queues: [risk: 10, webhooks: 5],
   plugins: [Oban.Plugins.Pruner]
 
 # Configures the mailer
