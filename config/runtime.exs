@@ -57,21 +57,22 @@ if config_env() == :prod do
   config :bravo_multipais, :dns_cluster_query, System.get_env("DNS_CLUSTER_QUERY")
 
   config :bravo_multipais, BravoMultipaisWeb.Endpoint,
-    url: [host: host, port: url_port, scheme: url_scheme],
-    bind_ip =
-  if System.get_env("PHX_IPV6") in ~w(true 1) do
-    {0, 0, 0, 0, 0, 0, 0, 0}
-  else
-    {0, 0, 0, 0}
-  end
+    url: [host: host, port: url_port, scheme: url_scheme]
 
-config :bravo_multipais, BravoMultipaisWeb.Endpoint,
-  url: [host: host, port: url_port, scheme: url_scheme],
-  http: [
-    ip: bind_ip,
-    port: http_port
-  ],
-  secret_key_base: secret_key_base
+  bind_ip =
+    if System.get_env("PHX_IPV6") in ~w(true 1) do
+      {0, 0, 0, 0, 0, 0, 0, 0}
+    else
+      {0, 0, 0, 0}
+    end
+
+  config :bravo_multipais, BravoMultipaisWeb.Endpoint,
+    url: [host: host, port: url_port, scheme: url_scheme],
+    http: [
+      ip: bind_ip,
+      port: http_port
+    ],
+    secret_key_base: secret_key_base
 
   # ─────────────────────────────────────────────
   # Configuración de webhooks (WebhookNotifier)
