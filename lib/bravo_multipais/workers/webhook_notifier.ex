@@ -75,15 +75,34 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   Ejemplo:
       WebhookNotifier.enqueue(app.id)
   """
-  @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
-  def enqueue(application_id) when is_binary(application_id) do
-    %{"application_id" => application_id}
+  @spec enqueue(Ecto.UUID.t(), String.t(), keyword()) :: :ok | {:error, term()}
+  def enqueue(application_id, status, opts \\ [])
+      when is_binary(application_id) and is_binary(status) do
+    source = Keyword.get(opts, :source, "auto")
+
+    %{
+      "application_id" => application_id,
+      "status" => status,
+      "source" => source
+    }
     |> __MODULE__.new()
     |> Oban.insert()
     |> case do
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
     end
+  end
+
+  # helper explícito para el botón
+  def enqueue_manual(application_id, status)
+      when is_binary(application_id) and is_binary(status) do
+    enqueue(application_id, status, source: "manual")
+  end
+
+  @spec enqueue(Ecto.UUID.t()) :: :ok | {:error, term()}
+  def enqueue(application_id) when is_binary(application_id) do
+    app = Repo.get!(Application, application_id)
+    enqueue(application_id, app.status, source: "auto")
   end
 
   # --- implementación real para dev/prod ---
@@ -130,13 +149,6 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
           status: app.status,
           http_status: status
         )
-
-        Endpoint.broadcast(@topic, "status_changed", %{
-          id: app.id,
-          status: app.status,
-          risk_score: app.risk_score,
-          at: DateTime.utc_now()
-        })
 
         Endpoint.broadcast(@topic, "webhook_resent", %{
           application_id: app.id,

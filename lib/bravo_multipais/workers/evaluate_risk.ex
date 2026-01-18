@@ -115,30 +115,25 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   end
 
   defp maybe_enqueue_webhook(%Application{} = app) do
-    case System.get_env("SKIP_WEBHOOKS") do
-      "true" ->
+    case WebhookNotifier.enqueue(app.id, app.status, source: "auto") do
+      :ok ->
+        Logger.info("Risk worker: webhook enqueued",
+          application_id: app.id,
+          status: app.status,
+          source: "auto"
+        )
+
         :ok
 
-      "1" ->
+      {:error, reason} ->
+        Logger.warning("Risk worker: webhook enqueue failed",
+          application_id: app.id,
+          status: app.status,
+          source: "auto",
+          reason: inspect(reason)
+        )
+
         :ok
-
-      "TRUE" ->
-        :ok
-
-      _ ->
-        case WebhookNotifier.enqueue(app.id) do
-          :ok ->
-            Logger.info("Risk worker: webhook enqueued", application_id: app.id)
-            :ok
-
-          {:error, reason} ->
-            Logger.warning("Risk worker: webhook enqueue failed",
-              application_id: app.id,
-              reason: inspect(reason)
-            )
-
-            :ok
-        end
     end
   end
 end

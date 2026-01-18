@@ -452,3 +452,40 @@ A partir de esta base, es sencillo:
 	•	Añadir nuevos países y reglas de riesgo.
 	•	Endurecer la seguridad (auth, firma de webhooks, políticas de datos).
 	•	Escalar a entornos de producción con mayor volumen de solicitudes y jobs.
+
+
+## Configuración rápida (variables de entorno)
+
+- `WEBHOOK_URL` (opcional): endpoint receptor del webhook (default: `http://localhost:4001/webhooks/applications`)
+- `SKIP_WEBHOOKS` (opcional): si es `true|1|TRUE`, deshabilita envíos HTTP reales (útil en dev/offline)
+
+
+### Dedupe / Idempotencia (WebhookNotifier)
+
+El webhook se procesa como job de Oban (cola `:webhooks`) y usa un `unique` de 60s por:
+
+- `application_id`
+- `source` (`auto` | `manual`)
+
+Esto evita el "spam" del botón de re-envío (no encola el mismo `manual` múltiples veces en 60s),
+pero **no bloquea** el webhook automático del flujo de negocio.
+
+En otras palabras:
+- auto y manual pueden coexistir
+- manual se dedupea para evitar clicks repetidos
+
+**Auto vs Manual**
+- `source=auto`: se encola automáticamente cuando el riesgo termina (evento de negocio).
+- `source=manual`: se encola desde el backoffice para recuperación operativa (reintento controlado).
+
+
+## Cómo probar el flujo completo (manual)
+
+1) Crea una solicitud y espera a que el riesgo cambie de `PENDING_RISK` a estado final.
+2) En el detalle, usa:
+   - **Re-evaluar riesgo**: re-encola el job de riesgo (si ya está final, el worker hace early-exit).
+   - **Re-enviar webhook**: encola el webhook con `source=manual` (dedupe 60s).
+
+Tip: si estás desarrollando sin receptor real, usa `SKIP_WEBHOOKS=true`.
+
+Nota: `EvaluateRisk` hace early-exit si la solicitud ya está en estado final (idempotencia operativa).

@@ -318,25 +318,28 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
 
   @impl true
   def handle_event("resend_webhook", %{"id" => id}, socket) do
-    case WebhookNotifier.enqueue(id) do
-      :ok ->
-        socket =
-          socket
-          |> assign(:success_message, "Webhook reenviado correctamente.")
-          |> assign(:error_message, nil)
-          |> schedule_clear_messages()
+    # Mejor obtener el status real de DB (la vista puede estar stale)
+    status =
+      case Queries.get_application(id) do
+        %Application{status: s} -> s
+        _ -> "UNKNOWN"
+      end
 
-        {:noreply, socket}
+    case WebhookNotifier.enqueue_manual(id, status) do
+      :ok ->
+        {:noreply,
+         socket
+         |> assign(:success_message, "Webhook reenviado (manual) y encolado para entrega.")
+         |> assign(:error_message, nil)
+         |> schedule_clear_messages()}
 
       {:error, reason} ->
-        socket =
-          socket
-          |> put_flash(:error, "No se pudo reenviar el webhook.")
-          |> assign(:error_message, "No se pudo reenviar el webhook: #{inspect(reason)}")
-          |> assign(:success_message, nil)
-          |> schedule_clear_messages()
-
-        {:noreply, socket}
+        {:noreply,
+         socket
+         |> put_flash(:error, "No se pudo reenviar el webhook.")
+         |> assign(:error_message, "No se pudo reenviar el webhook: #{inspect(reason)}")
+         |> assign(:success_message, nil)
+         |> schedule_clear_messages()}
     end
   end
 
@@ -481,7 +484,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 <% end %>
               </select>
             </div>
-
+            
     <!-- Nombre completo -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -496,7 +499,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-
+            
     <!-- Documento -->
             <div>
               <label class="block text-sm font-medium text-slate-700 mb-1">
@@ -511,7 +514,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 required
               />
             </div>
-
+            
     <!-- Monto e ingreso -->
             <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
@@ -558,7 +561,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
           </form>
         </div>
       </div>
-
+      
     <!-- Panel de lista + detalle -->
       <div>
         <div class="bg-white shadow rounded-2xl p-6 space-y-6">
@@ -572,7 +575,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                 Se actualizan automáticamente cuando el motor de riesgo termina la evaluación.
               </p>
             </div>
-
+            
     <!-- Filtros -->
             <form phx-change="filter" class="flex flex-wrap gap-3 items-end">
               <!-- País -->
@@ -590,7 +593,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   <% end %>
                 </select>
               </div>
-
+              
     <!-- Estado -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -606,7 +609,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   <% end %>
                 </select>
               </div>
-
+              
     <!-- Sólo evaluadas -->
               <div class="flex items-center mt-2 sm:mt-0">
                 <input
@@ -620,7 +623,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   Sólo con riesgo evaluado
                 </span>
               </div>
-
+              
     <!-- Rango de monto -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -649,7 +652,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                   class="block w-28 rounded-xl border-slate-300 shadow-sm text-xs focus:border-indigo-500 focus:ring-indigo-500"
                 />
               </div>
-
+              
     <!-- Rango de fechas -->
               <div>
                 <label class="block text-xs font-medium text-slate-600 mb-1">
@@ -676,7 +679,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </div>
             </form>
           </div>
-
+          
     <!-- Tabla -->
           <div class="overflow-x-auto">
             <table class="min-w-full text-sm">
@@ -716,34 +719,34 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                       <td class="py-2 px-3">
                         {country_badge(app.country)}
                       </td>
-
+                      
     <!-- Nombre -->
                       <td class="py-2 px-3 text-slate-800">
                         {app.full_name}
                       </td>
-
+                      
     <!-- Monto -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.amount}
                       </td>
-
+                      
     <!-- Ingreso mensual -->
                       <td class="py-2 px-3 text-right tabular-nums text-slate-700">
                         € {app.monthly_income}
                       </td>
-
+                      
     <!-- Estado -->
                       <td class="py-2 px-3 text-center">
                         {status_badge(app.status)}
                       </td>
-
+                      
     <!-- Score: sólo backoffice ve el chip -->
                       <%= if backoffice?(@current_scope) do %>
                         <td class="py-2 px-3 text-center">
                           {risk_score_chip(app.risk_score)}
                         </td>
                       <% end %>
-
+                      
     <!-- Fecha creación -->
                       <td class="py-2 px-3 text-right text-xs text-slate-500">
                         {Calendar.strftime(app.inserted_at, "%Y-%m-%d %H:%M")}
@@ -754,7 +757,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
               </tbody>
             </table>
           </div>
-
+          
     <!-- Panel de detalle -->
           <div class="mt-4">
             <%= if @selected_app do %>
@@ -830,7 +833,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                         </span>
                       </p>
                     </div>
-
+                    
     <!-- Columna 2 -->
                     <div class="space-y-2">
                       <p>
@@ -862,7 +865,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                         </button>
                       </p>
                     </div>
-
+                    
     <!-- Columna 3: info bancaria + timeline + acciones
                          (se apila debajo en 2 columnas gracias al grid md:grid-cols-2) -->
                     <div class="md:col-span-2 lg:col-span-1 space-y-4">
@@ -940,7 +943,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
                             Sin información bancaria disponible.
                           </p>
                         <% end %>
-
+                        
     <!-- Acciones de integración -->
                         <div class="flex flex-wrap gap-2 pt-2">
                           <% disabled = is_nil(@selected_app.risk_score) %>
@@ -1021,15 +1024,36 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       (socket.assigns[:webhook_events] || %{})
       |> Map.put(application_id, at_naive)
 
-    {:noreply, assign(socket, :webhook_events, webhook_events)}
+    # Para el toast, tratamos de armar un mensaje útil:
+    # 1) si la app está en la página actual, úsala
+    # 2) si no, fallback a DB
+    app =
+      Enum.find(socket.assigns.applications || [], fn a -> a.id == application_id end) ||
+        Queries.get_application(application_id)
+
+    toast_msg =
+      case app do
+        %Application{country: country, status: status} ->
+          "Webhook reenviado (#{country}) para solicitud #{status}."
+
+        _ ->
+          "Webhook reenviado correctamente."
+      end
+
+    {:noreply,
+     socket
+     |> assign(:webhook_events, webhook_events)
+     |> assign(:success_message, toast_msg)
+     |> assign(:error_message, nil)
+     |> schedule_clear_messages()}
   end
 
-    @impl true
+  @impl true
   def handle_info(
         %Phoenix.Socket.Broadcast{
           topic: @topic,
           event: "status_changed",
-          payload: %{id: id, status: _status, risk_score: _risk_score}
+          payload: %{id: id}
         },
         socket
       ) do
@@ -1043,20 +1067,18 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
 
     apps = page_data.entries
 
-    selected_app =
-      case socket.assigns.selected_app do
-        %Application{id: ^id} ->
-          Queries.get_application(id)
-
-        other ->
-          other
-      end
-
-    # Intentamos encontrar el registro ya actualizado en la misma página,
-    # y si no está (por filtros/paginación), hacemos fallback a DB.
+    # Si la solicitud está visible en la página actual, la tomamos de ahí;
+    # si no, hacemos fallback a DB.
     updated_app =
       Enum.find(apps, fn a -> a.id == id end) ||
         Queries.get_application(id)
+
+    # Si el usuario tenía abierto el detalle de esa misma solicitud, lo refrescamos desde DB
+    selected_app =
+      case socket.assigns.selected_app do
+        %Application{id: ^id} -> updated_app || Queries.get_application(id)
+        other -> other
+      end
 
     toast_msg =
       case updated_app do
