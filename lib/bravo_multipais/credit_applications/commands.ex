@@ -41,8 +41,12 @@ defmodule BravoMultipais.CreditApplications.Commands do
           | {:bank_error, term()}
           | {:unexpected_error, term()}
 
-  @spec create_application(params) :: {:ok, Application.t()} | {:error, error_reason}
-  def create_application(params) when is_map(params) do
+  @spec create_application(params, keyword()) :: {:ok, Application.t()} | {:error, error_reason}
+  def create_application(params, opts \\ [])
+
+  def create_application(params, opts) when is_map(params) and is_list(opts) do
+    source = Keyword.get(opts, :source, "system")
+
     country = fetch(params, "country")
     full_name = fetch(params, "full_name")
     amount = fetch(params, "amount")
@@ -90,19 +94,16 @@ defmodule BravoMultipais.CreditApplications.Commands do
            :ok <- ok_or_policy_error(policy.validate_document(attrs.document)),
            {:ok, bank_profile} <- ok_or_bank_error(Bank.fetch_profile(attrs.country, attrs)),
            :ok <- ok_or_policy_error(policy.business_rules(attrs, bank_profile)),
-           {:ok, app} <- persist_and_enqueue(attrs, bank_profile, policy) do
+           {:ok, app} <- persist_and_enqueue(attrs, bank_profile, policy, source) do
         {:ok, app}
       else
-        {:error, reason} ->
-          {:error, reason}
-
-        other ->
-          {:error, {:unexpected_error, other}}
+        {:error, reason} -> {:error, reason}
+        other -> {:error, {:unexpected_error, other}}
       end
     end
   end
 
-  def create_application(_), do: {:error, :invalid_payload}
+  def create_application(_params, _opts), do: {:error, :invalid_payload}
 
   # =====================
   # Helpers de lectura
@@ -139,9 +140,9 @@ defmodule BravoMultipais.CreditApplications.Commands do
   # Persistencia + Oban (ATÓMICO)
   # =====================
 
-  @spec persist_and_enqueue(map(), map(), module()) ::
+  @spec persist_and_enqueue(map(), map(), module(), String.t()) ::
           {:ok, Application.t()} | {:error, error_reason}
-  defp persist_and_enqueue(attrs, bank_profile, policy_module) do
+  defp persist_and_enqueue(attrs, bank_profile, policy_module, source) do
     initial_status = policy_module.next_status_on_creation(attrs, bank_profile)
 
     changes =
@@ -157,54 +158,26 @@ defmodule BravoMultipais.CreditApplications.Commands do
     Repo.transaction(fn ->
       case Repo.insert(changeset) do
         {:ok, app} ->
-          # Audit: created
           _ =
-            Events.record(
-              app.id,
-              EventTypes.created(),
-              %{
-                country: app.country,
-                status: app.status,
-                amount: app.amount,
-                monthly_income: app.monthly_income
-              }, source: "system")
+            Events.record(app.id, "created",
+              source: source,
+              payload: %{country: app.country, status: app.status}
+            )
 
           case EvaluateRiskWorker.enqueue(app.id) do
             :ok ->
-              # Audit: risk enqueued
               _ =
-                Events.record(
-                  app.id,
-                  Event.risk_enqueued(),
-                  %{
-                    queue: "risk"
-                  }, source: "system")
+                Events.record(app.id, "risk_enqueued",
+                  source: source,
+                  payload: %{queue: "risk"}
+                )
 
               app
 
             {:error, reason} ->
-              # Audit: risk enqueue failed (antes de rollback)
-              _ =
-                Events.record(
-                  app.id,
-                  Event.risk_enqueue_failed(),
-                  %{
-                    queue: "risk",
-                    reason: inspect(reason)
-                  }, source: "system")
-
               Repo.rollback({:job_enqueue_failed, reason})
 
             other ->
-              _ =
-                Events.record(
-                  app.id,
-                  Event.risk_enqueue_failed(),
-                  %{
-                    queue: "risk",
-                    reason: inspect(other)
-                  }, source: "system")
-
               Repo.rollback({:job_enqueue_failed, other})
           end
 

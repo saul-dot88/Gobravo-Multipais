@@ -15,7 +15,9 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
     max_attempts: 5,
     unique: [
       fields: [:worker, :queue, :args],
-      keys: [:application_id],
+      # Importante: dedupe por application+status+source para no “comerte”
+      # transiciones rápidas (p.ej. UNDER_REVIEW -> APPROVED en < 60s).
+      keys: [:application_id, :status, :source],
       period: 60,
       states: [:available, :scheduled, :executing, :retryable]
     ]
@@ -31,39 +33,61 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   @event_version "v1"
 
   @impl Oban.Worker
-  def perform(%Oban.Job{args: %{"application_id" => id} = args}) do
-    app = Repo.get!(Application, id)
+  def perform(
+        %Oban.Job{id: job_id, attempt: attempt, args: %{"application_id" => id} = args} = job
+      ) do
+    case Repo.get(Application, id) do
+      nil ->
+        Logger.warning("WebhookNotifier: application not found, discarding",
+          application_id: id,
+          oban_job_id: job_id,
+          attempt: attempt
+        )
 
-    status = Map.get(args, "status", app.status)
-    source = Map.get(args, "source", "auto")
+        :discard
 
-    cond do
-      test_env?() ->
-        _ =
-          Events.record(
-            app.id,
-            EventTypes.webhook_skipped(),
-            %{
-              reason: "test_env",
-              source: source
-            }, source: "webhook_worker")
+      %Application{} = app ->
+        status = Map.get(args, "status", app.status)
+        source = Map.get(args, "source", "auto")
 
-        :ok
+        cond do
+          test_env?() ->
+            _ =
+              Events.record(
+                app.id,
+                EventTypes.webhook_skipped(),
+                %{
+                  reason: "test_env",
+                  status: status,
+                  source: source,
+                  oban_job_id: job_id,
+                  attempt: attempt
+                },
+                source: "webhook_worker"
+              )
 
-      skip_webhooks?() ->
-        _ =
-          Events.record(
-            app.id,
-            EventTypes.webhook_skipped(),
-            %{
-              reason: "skip_webhooks",
-              source: source
-            }, source: "webhook_worker")
+            :ok
 
-        :ok
+          skip_webhooks?() ->
+            _ =
+              Events.record(
+                app.id,
+                EventTypes.webhook_skipped(),
+                %{
+                  reason: "skip_webhooks",
+                  status: status,
+                  source: source,
+                  oban_job_id: job_id,
+                  attempt: attempt
+                },
+                source: "webhook_worker"
+              )
 
-      true ->
-        do_send_webhook(app, status, source)
+            :ok
+
+          true ->
+            do_send_webhook(app, status, source, job)
+        end
     end
   end
 
@@ -95,11 +119,16 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
   # --- implementación real para dev/prod ---
 
-  defp do_send_webhook(%Application{} = app, status, source) do
+  defp do_send_webhook(%Application{} = app, status, source, %Oban.Job{
+         id: job_id,
+         attempt: attempt
+       }) do
     url = webhook_url()
+    event_id = Ecto.UUID.generate()
+    started_at = System.monotonic_time()
 
     payload = %{
-      event_id: Ecto.UUID.generate(),
+      event_id: event_id,
       event_type: @event_type,
       version: @event_version,
       data: %{
@@ -117,8 +146,18 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
       {"content-type", "application/json"},
       {"x-bravo-event", @event_type},
       {"x-bravo-event-version", @event_version},
-      {"x-bravo-source", source}
+      {"x-bravo-source", source},
+      {"x-bravo-event-id", event_id}
     ]
+
+    Logger.info("WebhookNotifier: sending webhook",
+      application_id: app.id,
+      status: status,
+      url: url,
+      event_id: event_id,
+      oban_job_id: job_id,
+      attempt: attempt
+    )
 
     _ =
       Events.record(
@@ -128,26 +167,48 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
           url: url,
           status: status,
           risk_score: app.risk_score,
-          source: source
-        }, source: "webhook_worker")
+          source: source,
+          event_id: event_id,
+          oban_job_id: job_id,
+          attempt: attempt
+        },
+        source: "webhook_worker"
+      )
 
     Finch.build(:post, url, headers, body)
     |> Finch.request(BravoMultipais.Finch)
-    |> handle_http_response(app, url, source)
+    |> handle_http_response(app, url, source, event_id, job_id, attempt, started_at)
   end
 
-  defp handle_http_response({:ok, resp}, %Application{} = app, url, source) do
+  defp handle_http_response(
+         {:ok, resp},
+         %Application{} = app,
+         url,
+         source,
+         event_id,
+         job_id,
+         attempt,
+         started_at
+       ) do
+    duration_ms = duration_ms_since(started_at)
+
     case resp.status do
-      status when status in 200..299 ->
+      http_status when http_status in 200..299 ->
         _ =
           Events.record(
             app.id,
             EventTypes.webhook_sent(),
             %{
               url: url,
-              http_status: status,
-              source: source
-            }, source: "webhook_worker")
+              http_status: http_status,
+              source: source,
+              event_id: event_id,
+              oban_job_id: job_id,
+              attempt: attempt,
+              duration_ms: duration_ms
+            },
+            source: "webhook_worker"
+          )
 
         Endpoint.broadcast(@topic, "webhook_resent", %{
           application_id: app.id,
@@ -156,35 +217,60 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
 
         :ok
 
-      status when status in 400..499 ->
+      http_status when http_status in 400..499 ->
         _ =
           Events.record(
             app.id,
             EventTypes.webhook_discarded(),
             %{
               url: url,
-              http_status: status,
-              source: source
-            }, source: "webhook_worker")
+              http_status: http_status,
+              source: source,
+              event_id: event_id,
+              oban_job_id: job_id,
+              attempt: attempt,
+              duration_ms: duration_ms,
+              response_body: truncate_body(resp.body)
+            },
+            source: "webhook_worker"
+          )
 
         :discard
 
-      status ->
+      http_status ->
         _ =
           Events.record(
             app.id,
             EventTypes.webhook_failed(),
             %{
               url: url,
-              http_status: status,
-              source: source
-            }, source: "webhook_worker")
+              http_status: http_status,
+              source: source,
+              event_id: event_id,
+              oban_job_id: job_id,
+              attempt: attempt,
+              duration_ms: duration_ms,
+              response_body: truncate_body(resp.body)
+            },
+            source: "webhook_worker"
+          )
 
-        {:error, {:http_error, status}}
+        {:error, {:http_error, http_status}}
     end
   end
 
-  defp handle_http_response({:error, reason}, %Application{} = app, url, source) do
+  defp handle_http_response(
+         {:error, reason},
+         %Application{} = app,
+         url,
+         source,
+         event_id,
+         job_id,
+         attempt,
+         started_at
+       ) do
+    duration_ms = duration_ms_since(started_at)
+
     _ =
       Events.record(
         app.id,
@@ -192,23 +278,39 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
         %{
           url: url,
           reason: inspect(reason),
-          source: source
-        }, source: "webhook_worker")
+          source: source,
+          event_id: event_id,
+          oban_job_id: job_id,
+          attempt: attempt,
+          duration_ms: duration_ms
+        },
+        source: "webhook_worker"
+      )
 
     {:error, reason}
   end
 
+  defp duration_ms_since(started_at_native) do
+    System.monotonic_time()
+    |> Kernel.-(started_at_native)
+    |> System.convert_time_unit(:native, :millisecond)
+  end
+
+  defp truncate_body(nil), do: nil
+  defp truncate_body(body) when is_binary(body), do: String.slice(body, 0, 500)
+  defp truncate_body(other), do: inspect(other) |> String.slice(0, 500)
+
   defp test_env? do
-    System.get_env("MIX_ENV") == "test"
+    Code.ensure_loaded?(Mix) and Mix.env() == :test
   end
 
   defp skip_webhooks? do
-    Elixir.Application.get_env(:bravo_multipais, :skip_webhooks, false) ||
+    Application.get_env(:bravo_multipais, :skip_webhooks, false) ||
       System.get_env("SKIP_WEBHOOKS") in ["true", "1", "TRUE"]
   end
 
   defp webhook_url do
-    Elixir.Application.get_env(
+    Application.get_env(
       :bravo_multipais,
       :webhook_url,
       "http://localhost:4001/webhooks/applications"

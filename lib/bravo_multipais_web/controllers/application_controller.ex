@@ -79,7 +79,7 @@ defmodule BravoMultipaisWeb.ApplicationController do
   def create(conn, params) do
     params = normalize_document(params)
 
-    case CreditApplications.create_application(params) do
+    case CreditApplications.create_application(params, source: "api") do
       {:ok, app} ->
         conn
         |> put_status(:created)

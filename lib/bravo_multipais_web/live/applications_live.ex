@@ -100,7 +100,7 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   def handle_event("create_application", params, socket) do
     attrs = build_attrs_from_params(params)
 
-    case CreditApplications.create_application(attrs) do
+    case CreditApplications.create_application(attrs, source: "backoffice") do
       {:ok, app} ->
         # recargamos con filtros actuales pero enviando a página 1
         filters = current_filters(socket.assigns)
@@ -255,27 +255,21 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
   def handle_event("select_app", %{"id" => id}, socket) do
     case Queries.get_application(id) do
       nil ->
-        socket =
-          socket
-          |> assign(:selected_app, nil)
-          |> assign(:show_raw_json, false)
-          |> assign(:error_message, "La solicitud seleccionada ya no existe.")
+        {:noreply,
+         socket
+         |> assign(:selected_app, nil)
+         |> assign(:show_raw_json, false)
+         |> assign(:error_message, "La solicitud seleccionada ya no existe.")
+         |> assign(:success_message, nil)
+         |> schedule_clear_messages()}
 
-        {:noreply, socket}
-
-      app ->
-        socket =
-          socket
-          |> assign(:selected_app, app)
-          |> assign(:error_message, nil)
-
-        {:noreply, socket}
+      %Application{} = app ->
+        {:noreply,
+         socket
+         |> assign(:selected_app, app)
+         |> assign(:show_raw_json, false)
+         |> assign(:error_message, nil)}
     end
-  end
-
-  @impl true
-  def handle_event("select_application", %{"id" => id}, socket) do
-    {:noreply, assign(socket, :selected_application_id, id)}
   end
 
   @impl true
@@ -1024,9 +1018,6 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
       (socket.assigns[:webhook_events] || %{})
       |> Map.put(application_id, at_naive)
 
-    # Para el toast, tratamos de armar un mensaje útil:
-    # 1) si la app está en la página actual, úsala
-    # 2) si no, fallback a DB
     app =
       Enum.find(socket.assigns.applications || [], fn a -> a.id == application_id end) ||
         Queries.get_application(application_id)
@@ -1067,16 +1058,13 @@ defmodule BravoMultipaisWeb.ApplicationsLive do
 
     apps = page_data.entries
 
-    # Si la solicitud está visible en la página actual, la tomamos de ahí;
-    # si no, hacemos fallback a DB.
     updated_app =
       Enum.find(apps, fn a -> a.id == id end) ||
         Queries.get_application(id)
 
-    # Si el usuario tenía abierto el detalle de esa misma solicitud, lo refrescamos desde DB
     selected_app =
       case socket.assigns.selected_app do
-        %Application{id: ^id} -> updated_app || Queries.get_application(id)
+        %Application{id: ^id} -> updated_app
         other -> other
       end
 

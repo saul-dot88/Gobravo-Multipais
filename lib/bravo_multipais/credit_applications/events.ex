@@ -47,6 +47,15 @@ defmodule BravoMultipais.CreditApplications.Events do
   """
   @spec record(Ecto.UUID.t(), String.t(), map(), keyword()) ::
           {:ok, Event.t()} | {:error, Ecto.Changeset.t()}
+
+  def record(application_id, event_type, attrs, opts)
+      when is_binary(application_id) and is_binary(event_type) and is_list(attrs) do
+    payload = Keyword.get(attrs, :payload, %{})
+    merged_opts = Keyword.merge(opts, Keyword.drop(attrs, [:payload]))
+
+    record(application_id, event_type, payload, merged_opts)
+  end
+
   def record(application_id, event_type, payload \\ %{}, opts \\ [])
       when is_binary(application_id) and is_binary(event_type) and is_map(payload) do
     source = Keyword.get(opts, :source, "system")

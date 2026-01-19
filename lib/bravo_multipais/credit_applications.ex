@@ -224,12 +224,19 @@ defmodule BravoMultipais.CreditApplications do
   # ─────────────────────────────────────────────────────────────
 
   @spec create_application(map()) ::
-          {:ok, application}
+          {:ok, Application.t()}
           | {:error, {:policy_error, term()}}
           | {:error, {:invalid_changeset, Ecto.Changeset.t()}}
           | {:error, term()}
-  def create_application(params) do
-    case Commands.create_application(params) do
+  def create_application(params), do: create_application(params, [])
+
+  @spec create_application(map(), keyword()) ::
+          {:ok, Application.t()}
+          | {:error, {:policy_error, term()}}
+          | {:error, {:invalid_changeset, Ecto.Changeset.t()}}
+          | {:error, term()}
+  def create_application(params, opts) when is_map(params) and is_list(opts) do
+    case Commands.create_application(params, opts) do
       {:ok, app} ->
         {:ok, app}
 
