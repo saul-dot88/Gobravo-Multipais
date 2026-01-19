@@ -18,6 +18,7 @@ defmodule BravoMultipais.CreditApplications.Commands do
   alias BravoMultipais.CreditApplications.Application
   alias BravoMultipais.Policies
   alias BravoMultipais.Workers.EvaluateRisk, as: EvaluateRiskWorker
+  alias BravoMultipais.CreditApplications.{Events, EventTypes}
 
   @typedoc "Parámetros crudos que vienen del formulario LiveView o de la API"
   @type params :: map()
@@ -156,17 +157,54 @@ defmodule BravoMultipais.CreditApplications.Commands do
     Repo.transaction(fn ->
       case Repo.insert(changeset) do
         {:ok, app} ->
-          case EvaluateRiskWorker.enqueue(app.id) do
-            {:ok, _job} ->
-              app
+          # Audit: created
+          _ =
+            Events.record(
+              app.id,
+              EventTypes.created(),
+              %{
+                country: app.country,
+                status: app.status,
+                amount: app.amount,
+                monthly_income: app.monthly_income
+              }, source: "system")
 
+          case EvaluateRiskWorker.enqueue(app.id) do
             :ok ->
+              # Audit: risk enqueued
+              _ =
+                Events.record(
+                  app.id,
+                  Event.risk_enqueued(),
+                  %{
+                    queue: "risk"
+                  }, source: "system")
+
               app
 
             {:error, reason} ->
+              # Audit: risk enqueue failed (antes de rollback)
+              _ =
+                Events.record(
+                  app.id,
+                  Event.risk_enqueue_failed(),
+                  %{
+                    queue: "risk",
+                    reason: inspect(reason)
+                  }, source: "system")
+
               Repo.rollback({:job_enqueue_failed, reason})
 
             other ->
+              _ =
+                Events.record(
+                  app.id,
+                  Event.risk_enqueue_failed(),
+                  %{
+                    queue: "risk",
+                    reason: inspect(other)
+                  }, source: "system")
+
               Repo.rollback({:job_enqueue_failed, other})
           end
 
@@ -175,14 +213,9 @@ defmodule BravoMultipais.CreditApplications.Commands do
       end
     end)
     |> case do
-      {:ok, app} ->
-        {:ok, app}
-
-      {:error, {:invalid_changeset, cs}} ->
-        {:error, {:invalid_changeset, cs}}
-
-      {:error, {:job_enqueue_failed, reason}} ->
-        {:error, {:job_enqueue_failed, reason}}
+      {:ok, app} -> {:ok, app}
+      {:error, {:invalid_changeset, cs}} -> {:error, {:invalid_changeset, cs}}
+      {:error, {:job_enqueue_failed, reason}} -> {:error, {:job_enqueue_failed, reason}}
     end
   end
 end

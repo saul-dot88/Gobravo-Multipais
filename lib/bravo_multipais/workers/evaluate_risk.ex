@@ -26,8 +26,9 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
   alias BravoMultipais.Repo
   alias BravoMultipais.Workers.WebhookNotifier
   alias BravoMultipaisWeb.Endpoint
+  alias BravoMultipais.CreditApplications.{Events, EventTypes}
 
-  import Ecto.Changeset
+  import Ecto.Changeset, only: [change: 2]
   require Logger
 
   @topic "applications"
@@ -59,11 +60,6 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
 
         %{score: score, final_status: final_status} = EvaluateRiskJob.run(app)
 
-        Logger.debug("Risk worker: domain job result",
-          application_id: app.id,
-          result: %{score: score, final_status: final_status}
-        )
-
         changeset =
           app
           |> Application.status_changeset(final_status)
@@ -77,6 +73,17 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
               new_score: updated.risk_score,
               document_masked: LogSanitizer.mask_document(updated.document)
             )
+
+            # Audit: risk evaluated (REAL)
+            _ =
+              Events.record(
+                updated.id,
+                "risk_evaluated",
+                %{
+                  country: updated.country,
+                  status: updated.status,
+                  risk_score: updated.risk_score
+                }, source: "risk_worker")
 
             Endpoint.broadcast(@topic, "status_changed", %{
               id: updated.id,
@@ -100,6 +107,37 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     end
   end
 
+  defp maybe_enqueue_webhook(%Application{} = app) do
+    source = "auto"
+
+    case WebhookNotifier.enqueue(app.id, app.status, source: source) do
+      :ok ->
+        _ =
+          Events.record(
+            app.id,
+            EventTypes.webhook_enqueued(),
+            %{
+              status: app.status,
+              source: source
+            }, source: "risk_worker")
+
+        :ok
+
+      {:error, reason} ->
+        _ =
+          Events.record(
+            app.id,
+            EventTypes.webhook_enqueue_failed(),
+            %{
+              status: app.status,
+              source: source,
+              reason: inspect(reason)
+            }, source: "risk_worker")
+
+        :ok
+    end
+  end
+
   @doc """
   API de conveniencia para encolar un job de riesgo desde Commands/dominio.
   """
@@ -111,29 +149,6 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     |> case do
       {:ok, _job} -> :ok
       {:error, reason} -> {:error, reason}
-    end
-  end
-
-  defp maybe_enqueue_webhook(%Application{} = app) do
-    case WebhookNotifier.enqueue(app.id, app.status, source: "auto") do
-      :ok ->
-        Logger.info("Risk worker: webhook enqueued",
-          application_id: app.id,
-          status: app.status,
-          source: "auto"
-        )
-
-        :ok
-
-      {:error, reason} ->
-        Logger.warning("Risk worker: webhook enqueue failed",
-          application_id: app.id,
-          status: app.status,
-          source: "auto",
-          reason: inspect(reason)
-        )
-
-        :ok
     end
   end
 end
