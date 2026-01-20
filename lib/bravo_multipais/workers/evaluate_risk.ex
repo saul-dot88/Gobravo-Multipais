@@ -58,7 +58,26 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
           current_score: app.risk_score
         )
 
-        %{score: score, final_status: final_status} = EvaluateRiskJob.run(app)
+        policy_version = BravoMultipais.Policies.default_version(app.country)
+        policy = BravoMultipais.Policies.policy_for(app.country, policy_version)
+        policy_id = BravoMultipais.Policies.policy_id(app.country, policy_version)
+
+        bank_profile = app.bank_profile || %{}
+
+        # Audit: policy aplicada (REAL)
+        _ =
+          Events.record(
+            app.id,
+            "policy_applied",
+            %{
+              country: app.country,
+              policy_id: policy_id,
+              policy_module: inspect(policy)
+            },
+            source: "risk_worker"
+          )
+
+        %{score: score, final_status: final_status} = policy.assess_risk(app, bank_profile)
 
         changeset =
           app
@@ -82,8 +101,11 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
                 %{
                   country: updated.country,
                   status: updated.status,
-                  risk_score: updated.risk_score
-                }, source: "risk_worker")
+                  risk_score: updated.risk_score,
+                  policy_id: policy_id
+                },
+                source: "risk_worker"
+              )
 
             Endpoint.broadcast(@topic, "status_changed", %{
               id: updated.id,
@@ -92,7 +114,7 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
               risk_score: updated.risk_score
             })
 
-            maybe_enqueue_webhook(updated)
+            maybe_enqueue_webhook(updated, policy_id: policy_id, source: "auto")
 
             :ok
 
@@ -107,10 +129,18 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
     end
   end
 
-  defp maybe_enqueue_webhook(%Application{} = app) do
-    source = "auto"
+  defp maybe_enqueue_webhook(%Application{} = app, opts \\ []) do
+    # Fuente de este enqueue: automático (risk worker)
+    source = Keyword.get(opts, :source, "auto")
 
-    case WebhookNotifier.enqueue(app.id, app.status, source: source) do
+    # Amarra policy_id al webhook (para trazabilidad / auditoría)
+    policy_id =
+      Keyword.get_lazy(opts, :policy_id, fn ->
+        version = BravoMultipais.Policies.default_version(app.country)
+        BravoMultipais.Policies.policy_id(app.country, version)
+      end)
+
+    case WebhookNotifier.enqueue(app.id, app.status, source: source, policy_id: policy_id) do
       :ok ->
         _ =
           Events.record(
@@ -118,8 +148,11 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
             EventTypes.webhook_enqueued(),
             %{
               status: app.status,
-              source: source
-            }, source: "risk_worker")
+              source: source,
+              policy_id: policy_id
+            },
+            source: "risk_worker"
+          )
 
         :ok
 
@@ -131,9 +164,13 @@ defmodule BravoMultipais.Workers.EvaluateRisk do
             %{
               status: app.status,
               source: source,
+              policy_id: policy_id,
               reason: inspect(reason)
-            }, source: "risk_worker")
+            },
+            source: "risk_worker"
+          )
 
+        # No tronamos el flow de riesgo por un webhook fallido
         :ok
     end
   end

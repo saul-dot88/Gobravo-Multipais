@@ -63,6 +63,12 @@ config :bravo_multipais, BravoMultipaisWeb.Endpoint,
     ]
   ]
 
+config :bravo_multipais, :policy_versions, %{
+  "ES" => "v1",
+  "IT" => "v1",
+  "PT" => "v1"
+}
+
 # Enable dev routes for dashboard and mailbox
 config :bravo_multipais, dev_routes: true
 

@@ -33,6 +33,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   @event_version "v1"
 
   @impl Oban.Worker
+  @impl Oban.Worker
   def perform(
         %Oban.Job{id: job_id, attempt: attempt, args: %{"application_id" => id} = args} = job
       ) do
@@ -49,6 +50,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
       %Application{} = app ->
         status = Map.get(args, "status", app.status)
         source = Map.get(args, "source", "auto")
+        policy_id = Map.get(args, "policy_id")
 
         cond do
           test_env?() ->
@@ -60,6 +62,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
                   reason: "test_env",
                   status: status,
                   source: source,
+                  policy_id: policy_id,
                   oban_job_id: job_id,
                   attempt: attempt
                 },
@@ -77,6 +80,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
                   reason: "skip_webhooks",
                   status: status,
                   source: source,
+                  policy_id: policy_id,
                   oban_job_id: job_id,
                   attempt: attempt
                 },
@@ -86,7 +90,7 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
             :ok
 
           true ->
-            do_send_webhook(app, status, source, job)
+            do_send_webhook(app, status, source, policy_id, job)
         end
     end
   end
@@ -94,16 +98,24 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   @doc """
   Helper para encolar el job del webhook desde cualquier parte del dominio.
   """
+  @doc """
+  Helper para encolar el job del webhook desde cualquier parte del dominio.
+  """
   @spec enqueue(Ecto.UUID.t(), String.t(), keyword()) :: :ok | {:error, term()}
   def enqueue(application_id, status, opts \\ [])
       when is_binary(application_id) and is_binary(status) do
     source = Keyword.get(opts, :source, "auto")
+    policy_id = Keyword.get(opts, :policy_id)
 
-    %{
-      "application_id" => application_id,
-      "status" => status,
-      "source" => source
-    }
+    args =
+      %{
+        "application_id" => application_id,
+        "status" => status,
+        "source" => source
+      }
+      |> maybe_put("policy_id", policy_id)
+
+    args
     |> __MODULE__.new()
     |> Oban.insert()
     |> case do
@@ -112,73 +124,83 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
     end
   end
 
-  def enqueue_manual(application_id, status)
+  defp maybe_put(map, _key, nil), do: map
+  defp maybe_put(map, _key, ""), do: map
+  defp maybe_put(map, key, value), do: Map.put(map, key, value)
+
+  def enqueue_manual(application_id, status, opts \\ [])
       when is_binary(application_id) and is_binary(status) do
-    enqueue(application_id, status, source: "manual")
+    policy_id = Keyword.get(opts, :policy_id)
+
+    enqueue(application_id, status,
+      source: "manual",
+      policy_id: policy_id
+    )
   end
 
   # --- implementación real para dev/prod ---
 
-  defp do_send_webhook(%Application{} = app, status, source, %Oban.Job{
-         id: job_id,
-         attempt: attempt
-       }) do
-    url = webhook_url()
-    event_id = Ecto.UUID.generate()
-    started_at = System.monotonic_time()
+  defp do_send_webhook(
+       %Application{} = app,
+       status,
+       source,
+       policy_id,
+       %Oban.Job{id: job_id, attempt: attempt}
+     ) do
+  url = webhook_url()
+  event_id = Ecto.UUID.generate()
+  started_at = System.monotonic_time()
 
-    payload = %{
-      event_id: event_id,
-      event_type: @event_type,
-      version: @event_version,
-      data: %{
-        application_id: app.id,
-        status: status,
-        risk_score: app.risk_score,
-        country: app.country,
-        source: source
-      }
+  payload = %{
+    event_id: event_id,
+    event_type: @event_type,
+    version: @event_version,
+    data: %{
+      application_id: app.id,
+      status: status,
+      risk_score: app.risk_score,
+      country: app.country,
+      source: source,
+      policy_id: policy_id
     }
+  }
 
-    body = Jason.encode!(payload)
+  body = Jason.encode!(payload)
 
-    headers = [
+  headers =
+    [
       {"content-type", "application/json"},
       {"x-bravo-event", @event_type},
       {"x-bravo-event-version", @event_version},
-      {"x-bravo-source", source},
-      {"x-bravo-event-id", event_id}
+      {"x-bravo-source", source}
     ]
+    |> maybe_add_header("x-bravo-policy-id", policy_id)
 
-    Logger.info("WebhookNotifier: sending webhook",
-      application_id: app.id,
-      status: status,
-      url: url,
-      event_id: event_id,
-      oban_job_id: job_id,
-      attempt: attempt
+  _ =
+    Events.record(
+      app.id,
+      EventTypes.webhook_sending(),
+      %{
+        url: url,
+        status: status,
+        risk_score: app.risk_score,
+        source: source,
+        policy_id: policy_id,
+        event_id: event_id,
+        oban_job_id: job_id,
+        attempt: attempt
+      },
+      source: "webhook_worker"
     )
 
-    _ =
-      Events.record(
-        app.id,
-        EventTypes.webhook_sending(),
-        %{
-          url: url,
-          status: status,
-          risk_score: app.risk_score,
-          source: source,
-          event_id: event_id,
-          oban_job_id: job_id,
-          attempt: attempt
-        },
-        source: "webhook_worker"
-      )
+  Finch.build(:post, url, headers, body)
+  |> Finch.request(BravoMultipais.Finch)
+  |> handle_http_response(app, url, source, event_id, job_id, attempt, started_at)
+end
 
-    Finch.build(:post, url, headers, body)
-    |> Finch.request(BravoMultipais.Finch)
-    |> handle_http_response(app, url, source, event_id, job_id, attempt, started_at)
-  end
+  defp maybe_add_header(headers, _name, nil), do: headers
+  defp maybe_add_header(headers, _name, ""), do: headers
+  defp maybe_add_header(headers, name, value), do: headers ++ [{name, to_string(value)}]
 
   defp handle_http_response(
          {:ok, resp},
