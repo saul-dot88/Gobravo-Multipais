@@ -141,62 +141,62 @@ defmodule BravoMultipais.Workers.WebhookNotifier do
   # --- implementación real para dev/prod ---
 
   defp do_send_webhook(
-       %Application{} = app,
-       status,
-       source,
-       policy_id,
-       %Oban.Job{id: job_id, attempt: attempt}
-     ) do
-  url = webhook_url()
-  event_id = Ecto.UUID.generate()
-  started_at = System.monotonic_time()
+         %Application{} = app,
+         status,
+         source,
+         policy_id,
+         %Oban.Job{id: job_id, attempt: attempt}
+       ) do
+    url = webhook_url()
+    event_id = Ecto.UUID.generate()
+    started_at = System.monotonic_time()
 
-  payload = %{
-    event_id: event_id,
-    event_type: @event_type,
-    version: @event_version,
-    data: %{
-      application_id: app.id,
-      status: status,
-      risk_score: app.risk_score,
-      country: app.country,
-      source: source,
-      policy_id: policy_id
-    }
-  }
-
-  body = Jason.encode!(payload)
-
-  headers =
-    [
-      {"content-type", "application/json"},
-      {"x-bravo-event", @event_type},
-      {"x-bravo-event-version", @event_version},
-      {"x-bravo-source", source}
-    ]
-    |> maybe_add_header("x-bravo-policy-id", policy_id)
-
-  _ =
-    Events.record(
-      app.id,
-      EventTypes.webhook_sending(),
-      %{
-        url: url,
+    payload = %{
+      event_id: event_id,
+      event_type: @event_type,
+      version: @event_version,
+      data: %{
+        application_id: app.id,
         status: status,
         risk_score: app.risk_score,
+        country: app.country,
         source: source,
-        policy_id: policy_id,
-        event_id: event_id,
-        oban_job_id: job_id,
-        attempt: attempt
-      },
-      source: "webhook_worker"
-    )
+        policy_id: policy_id
+      }
+    }
 
-  Finch.build(:post, url, headers, body)
-  |> Finch.request(BravoMultipais.Finch)
-  |> handle_http_response(app, url, source, event_id, job_id, attempt, started_at)
-end
+    body = Jason.encode!(payload)
+
+    headers =
+      [
+        {"content-type", "application/json"},
+        {"x-bravo-event", @event_type},
+        {"x-bravo-event-version", @event_version},
+        {"x-bravo-source", source}
+      ]
+      |> maybe_add_header("x-bravo-policy-id", policy_id)
+
+    _ =
+      Events.record(
+        app.id,
+        EventTypes.webhook_sending(),
+        %{
+          url: url,
+          status: status,
+          risk_score: app.risk_score,
+          source: source,
+          policy_id: policy_id,
+          event_id: event_id,
+          oban_job_id: job_id,
+          attempt: attempt
+        },
+        source: "webhook_worker"
+      )
+
+    Finch.build(:post, url, headers, body)
+    |> Finch.request(BravoMultipais.Finch)
+    |> handle_http_response(app, url, source, event_id, job_id, attempt, started_at)
+  end
 
   defp maybe_add_header(headers, _name, nil), do: headers
   defp maybe_add_header(headers, _name, ""), do: headers

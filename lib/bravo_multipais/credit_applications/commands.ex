@@ -70,31 +70,42 @@ defmodule BravoMultipais.CreditApplications.Commands do
         |> to_string()
         |> String.trim()
 
-      doc_map =
-        cond do
-          is_map(raw_document) ->
-            raw_document
-
-          is_binary(raw_document) ->
-            Normalizer.build_document_map(normalized_country, raw_document)
-
-          true ->
-            Normalizer.build_document_map(normalized_country, to_string(raw_document))
-        end
-
-      attrs = %{
-        country: normalized_country,
-        full_name: normalized_full_name,
-        amount: amount,
-        monthly_income: monthly_income,
-        document: doc_map
-      }
-
-      with policy <- Policies.policy_for(attrs.country),
-           :ok <- ok_or_policy_error(policy.validate_document(attrs.document)),
-           {:ok, bank_profile} <- ok_or_bank_error(Bank.fetch_profile(attrs.country, attrs)),
-           :ok <- ok_or_policy_error(policy.business_rules(attrs, bank_profile)),
-           {:ok, app} <- persist_and_enqueue(attrs, bank_profile, policy, source) do
+      with {:ok, doc_map} <- normalize_document(normalized_country, raw_document),
+           policy <- Policies.policy_for(normalized_country),
+           :ok <- ok_or_policy_error(policy.validate_document(doc_map)),
+           {:ok, bank_profile} <-
+             ok_or_bank_error(
+               Bank.fetch_profile(normalized_country, %{
+                 country: normalized_country,
+                 document: doc_map
+               })
+             ),
+           :ok <-
+             ok_or_policy_error(
+               policy.business_rules(
+                 %{
+                   country: normalized_country,
+                   full_name: normalized_full_name,
+                   amount: amount,
+                   monthly_income: monthly_income,
+                   document: doc_map
+                 },
+                 bank_profile
+               )
+             ),
+           {:ok, app} <-
+             persist_and_enqueue(
+               %{
+                 country: normalized_country,
+                 full_name: normalized_full_name,
+                 amount: amount,
+                 monthly_income: monthly_income,
+                 document: doc_map
+               },
+               bank_profile,
+               policy,
+               source
+             ) do
         {:ok, app}
       else
         {:error, reason} -> {:error, reason}
@@ -106,10 +117,95 @@ defmodule BravoMultipais.CreditApplications.Commands do
   def create_application(_params, _opts), do: {:error, :invalid_payload}
 
   # =====================
+  # Documento: normalización mínima por país
+  # =====================
+
+  defp normalize_document(country, raw) when is_binary(country) do
+    cond do
+      is_map(raw) ->
+        normalize_document_map(country, raw)
+
+      is_binary(raw) ->
+        {:ok, build_document_map(country, raw)}
+
+      true ->
+        {:ok, build_document_map(country, to_string(raw))}
+    end
+  end
+
+  # Si viene un map, intentamos:
+  # 1) si ya trae la key esperada (dni/codice_fiscale/nif) => ok
+  # 2) si trae "raw" => reconstruimos
+  # 3) si no, error :missing_document
+  defp normalize_document_map(country, %{} = doc) do
+    expected_key =
+      case country do
+        "ES" -> "dni"
+        "IT" -> "codice_fiscale"
+        "PT" -> "nif"
+        _ -> nil
+      end
+
+    cond do
+      is_nil(expected_key) ->
+        {:error, {:policy_error, {:unsupported_country, country}}}
+
+      Map.has_key?(doc, expected_key) or Map.has_key?(doc, String.to_atom(expected_key)) ->
+        value = fetch(doc, expected_key)
+
+        if is_nil(value) or String.trim(to_string(value)) == "" do
+          {:error, {:policy_error, :missing_document}}
+        else
+          {:ok, build_document_map(country, value)}
+        end
+
+      Map.has_key?(doc, "raw") or Map.has_key?(doc, :raw) ->
+        raw = fetch(doc, "raw")
+
+        if is_nil(raw) or String.trim(to_string(raw)) == "" do
+          {:error, {:policy_error, :missing_document}}
+        else
+          {:ok, build_document_map(country, raw)}
+        end
+
+      true ->
+        {:error, {:policy_error, :missing_document}}
+    end
+  end
+
+  defp build_document_map(country, value) do
+    raw =
+      value
+      |> to_string()
+      |> String.trim()
+
+    normalized =
+      raw
+      |> String.upcase()
+
+    case country do
+      "ES" ->
+        # DNI: 8 dígitos + letra, dejamos mayúsculas
+        %{"dni" => normalized, "raw" => raw}
+
+      "IT" ->
+        # Codice Fiscale suele usarse en mayúsculas
+        %{"codice_fiscale" => normalized, "raw" => raw}
+
+      "PT" ->
+        # NIF: sólo dígitos (por si meten espacios/guiones)
+        digits_only = normalized |> String.replace(~r/[^0-9]/, "")
+        %{"nif" => digits_only, "raw" => raw}
+
+      _ ->
+        %{"raw" => raw}
+    end
+  end
+
+  # =====================
   # Helpers de lectura
   # =====================
 
-  # Lee clave como string o atom existente; si no existe, devuelve nil.
   defp fetch(params, key) when is_binary(key) do
     Map.get(params, key) ||
       case safe_existing_atom(key) do
@@ -159,18 +255,32 @@ defmodule BravoMultipais.CreditApplications.Commands do
       case Repo.insert(changeset) do
         {:ok, app} ->
           _ =
-            Events.record(app.id, "created",
-              source: source,
-              payload: %{country: app.country, status: app.status}
-            )
+            Events.record(
+              app.id,
+              "created",
+              %{
+                country: app.country,
+                status: app.status
+              }, source: source)
+
+          _ =
+            Events.record(
+              app.id,
+              "document_validated",
+              %{
+                country: app.country,
+                doc_type: doc_type_for_country(app.country)
+              }, source: source)
 
           case EvaluateRiskWorker.enqueue(app.id) do
             :ok ->
               _ =
-                Events.record(app.id, "risk_enqueued",
-                  source: source,
-                  payload: %{queue: "risk"}
-                )
+                Events.record(
+                  app.id,
+                  "risk_enqueued",
+                  %{
+                    queue: "risk"
+                  }, source: source)
 
               app
 
@@ -186,9 +296,20 @@ defmodule BravoMultipais.CreditApplications.Commands do
       end
     end)
     |> case do
-      {:ok, app} -> {:ok, app}
-      {:error, {:invalid_changeset, cs}} -> {:error, {:invalid_changeset, cs}}
-      {:error, {:job_enqueue_failed, reason}} -> {:error, {:job_enqueue_failed, reason}}
+      {:ok, app} ->
+        {:ok, app}
+
+      {:error, {:invalid_changeset, cs}} ->
+        {:error, {:invalid_changeset, cs}}
+
+      {:error, {:job_enqueue_failed, reason}} ->
+        {:error, {:job_enqueue_failed, reason}}
     end
   end
+
+  # (en el mismo módulo Commands)
+  defp doc_type_for_country("ES"), do: "dni"
+  defp doc_type_for_country("IT"), do: "codice_fiscale"
+  defp doc_type_for_country("PT"), do: "nif"
+  defp doc_type_for_country(_), do: "raw"
 end
